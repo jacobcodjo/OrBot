@@ -1,0 +1,105 @@
+name: Backtest Or
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Jours d'historique M5 à rejouer"
+        default: "120"
+      only:
+        description: "Stratégies (ex. S2,S3 ; vide = toutes)"
+        default: ""
+      spread_pct:
+        description: "Spread en % du prix (vide = défaut : 0.015)"
+        default: ""
+      split:
+        description: "Séparer en deux périodes pour tester la stabilité (ex. 0.6, vide = non)"
+        default: "0.6"
+      grid:
+        description: "Grille facultative, séparée par des points-virgules (ex. strategies.S2_STOP_MODE=sweep,ob;tracker.STRUCT_EXIT=true,false)"
+        default: ""
+jobs:
+  run:
+    name: backtest or
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Backtest
+        env:
+          DAYS: ${{ github.event.inputs.days }}
+          ONLY: ${{ github.event.inputs.only }}
+          SPREAD: ${{ github.event.inputs.spread_pct }}
+          SPREAD_PCT: ${{ vars.SPREAD_PCT }}
+          UNIT_PCT: ${{ vars.UNIT_PCT }}
+          STOP_MODE: ${{ vars.STOP_MODE }}
+          S1_STOP_MODE: ${{ vars.S1_STOP_MODE }}
+          S2_STOP_MODE: ${{ vars.S2_STOP_MODE }}
+          S4_STOP_MODE: ${{ vars.S4_STOP_MODE }}
+          S9_TF: ${{ vars.S9_TF }}
+          S9_BARS: ${{ vars.S9_BARS }}
+          S9_MIN_RR: ${{ vars.S9_MIN_RR }}
+          S9_RISK_CAP_H1: ${{ vars.S9_RISK_CAP_H1 }}
+          S9_SL_BUF_ATR: ${{ vars.S9_SL_BUF_ATR }}
+          S9_MAX_AGE_MIN: ${{ vars.S9_MAX_AGE_MIN }}
+          S9_SESSION_FILTER: ${{ vars.S9_SESSION_FILTER }}
+          INTRADAY: ${{ vars.INTRADAY }}
+          INTRADAY_RUNNERS: ${{ vars.INTRADAY_RUNNERS }}
+          ONE_TRADE_PER_SIDE: ${{ vars.ONE_TRADE_PER_SIDE }}
+          S6_TOL_ATR: ${{ vars.S6_TOL_ATR }}
+          S1_CONFIRM_TF: ${{ vars.S1_CONFIRM_TF }}
+          S1_MIN_RR: ${{ vars.S1_MIN_RR }}
+          S1_RISK_CAP_H1: ${{ vars.S1_RISK_CAP_H1 }}
+          S1_ADX_MIN: ${{ vars.S1_ADX_MIN }}
+          S1_D1_ALIGN: ${{ vars.S1_D1_ALIGN }}
+          S1_OBST_ENTRY: ${{ vars.S1_OBST_ENTRY }}
+          S2_BIAS_FILTER: ${{ vars.S2_BIAS_FILTER }}
+          S2_HTF_ZONE: ${{ vars.S2_HTF_ZONE }}
+          S2_FIB_FILTER: ${{ vars.S2_FIB_FILTER }}
+          S2_MIN_RR: ${{ vars.S2_MIN_RR }}
+          S2_RISK_CAP_H1: ${{ vars.S2_RISK_CAP_H1 }}
+          S2_MAX_AGE_MIN: ${{ vars.S2_MAX_AGE_MIN }}
+          S2_SWEEP_MIN_ATR: ${{ vars.S2_SWEEP_MIN_ATR }}
+          S3_FIB_FILTER: ${{ vars.S3_FIB_FILTER }}
+          S3_FIB_CAP_TP3: ${{ vars.S3_FIB_CAP_TP3 }}
+          S3_CONTEXT_ALIGN: ${{ vars.S3_CONTEXT_ALIGN }}
+          S3_MAX_AGE_MIN: ${{ vars.S3_MAX_AGE_MIN }}
+          S3_REV_MIN_RR: ${{ vars.S3_REV_MIN_RR }}
+          S6_RISK_CAP_ATR: ${{ vars.S6_RISK_CAP_ATR }}
+          S6_MIN_RR: ${{ vars.S6_MIN_RR }}
+          S6_NOCONF_MIN_RR: ${{ vars.S6_NOCONF_MIN_RR }}
+          S6_CONF_RISK_FACTOR: ${{ vars.S6_CONF_RISK_FACTOR }}
+          S7_RISK_CAP_ATR: ${{ vars.S7_RISK_CAP_ATR }}
+          S7_ENTRY_MAX_ATR: ${{ vars.S7_ENTRY_MAX_ATR }}
+          REVERSAL_MIN_SIGNS: ${{ vars.REVERSAL_MIN_SIGNS }}
+          S2_CONFIRM_TF: ${{ vars.S2_CONFIRM_TF }}
+          S3_CONFIRM_TF: ${{ vars.S3_CONFIRM_TF }}
+          S4_CONFIRM_TF: ${{ vars.S4_CONFIRM_TF }}
+          S4_MIN_RR: ${{ vars.S4_MIN_RR }}
+          S4_MAX_AGE_MIN: ${{ vars.S4_MAX_AGE_MIN }}
+          S4_CONTEXT_ALIGN: ${{ vars.S4_CONTEXT_ALIGN }}
+          S4_SWEEP_MIN_ATR: ${{ vars.S4_SWEEP_MIN_ATR }}
+          CONFLUENCE_MIN: ${{ vars.CONFLUENCE_MIN }}
+          ENTRY_MODE: ${{ vars.ENTRY_MODE }}
+          ENTRY_MODES: ${{ vars.ENTRY_MODES }}
+          WEEKEND_EXIT: ${{ vars.WEEKEND_EXIT }}
+          DERIV_APP_ID: ${{ vars.DERIV_APP_ID }}
+          DERIV_WS_URL: ${{ vars.DERIV_WS_URL }}
+          SPLIT: ${{ github.event.inputs.split }}
+          GRID: ${{ github.event.inputs.grid }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          args=(--days "$DAYS" --telegram)
+          if [ -n "$SPREAD" ]; then args+=(--spread-pct "$SPREAD"); fi
+          if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
+          if [ -n "$SPLIT" ]; then args+=(--split "$SPLIT"); fi
+          if [ -n "$GRID" ]; then
+            IFS=';' read -ra sets <<< "$GRID"
+            for s in "${sets[@]}"; do args+=(--set "$s"); done
+          fi
+          python backtest.py "${args[@]}"

@@ -1,13 +1,14 @@
-"""Stratégies S1, S2, S3, S4 et S9 pour l'or (XAUUSD). Toutes les règles sont décrites dans le README (section Stratégies).
+"""Stratégies S1 à S4 pour l'or (XAUUSD). Toutes les règles sont décrites dans le README (section Stratégies).
 
 Module autonome : aucune entrée/sortie réseau. Chaque stratégie reçoit provide(tf) -> bougies du
 timeframe (la dernière est en formation) et renvoie un signal (dict) ou None.
 
   S1  Pullback                    structure HTF > impulsion + repli Fibonacci 50-79 % > entrée LTF (sweep, FVG/bloc d'ordre ; objectifs sur extensions)
   S2  Sweep + CHoCH                   M15 (sweep) > M5 (cassure de structure), killzones
-  S3  Figures & Retournement          figures H1/H4 + cassure M15 ; retournement H4 > H1 > M15 (sweep d'un niveau majeur + cassure de structure)
-  S4  CRT (Candle Range Theory)       D1/H4 (C1, C2) > M15 (cassure de structure après la clôture de C2)
-  S9  Market Profiles                 range > manipulation (sweep) > expansion : 5 setups A à E (profiles.py), niveaux clés, entrée au retest
+  S3  CRT (Candle Range Theory)       D1/H4 (C1, C2) > M15 (cassure de structure après la clôture de C2)
+  S4  Market Profiles                 range > manipulation (sweep) > expansion : 5 setups A à E (profiles.py), niveaux clés, entrée au retest
+
+Variables GitHub : le préfixe de chaque variable est le code de la stratégie (S1_*, S2_*, S3_* pour CRT, S4_* pour Market Profiles).
 
 Les heures sont en heure de New York ; D1 et H4 ouvrent à 17h New York.
 """
@@ -32,7 +33,7 @@ KILLZONES_NY = [("Asie", 20, 24), ("Asie", 0, 2), ("Londres", 2, 5), ("New York"
 # --- S2 Prise de liquidité + CHoCH ---
 S2_EQ_TOL_ATR = 0.15                   # equal highs/lows : deux swings H1 à moins de 0,15 ATR H1
 S2_SWEEP_BARS = 8                      # le sweep M15 date de 8 bougies M15 au plus (2 h)
-S2_SESSIONS = ("Londres", "New York", "London Close")   # killzones : Londres 02h-05h, New York 07h-10h, London Close 10h-12h (marchés à séance)
+S2_SESSIONS = ()                       # killzones facultatives (ex. ("Londres", "New York")) ; vide = aucune restriction de session
 S2_PIVOT_BARS = 36                     # pivot M5 à moins de 36 bougies M5 (3 h) du sommet/creux du sweep
 
 # --- S1 Pullback (impulsion + retracement Fibonacci) ---
@@ -79,8 +80,7 @@ def mirror(cs):
 
 
 # ======================================================================================================================
-# Fibonacci de position : jambe de référence et profondeur d'un prix dans la jambe (S2 : premium / discount ; S3 : profondeur du repli,
-# plafond du TP3).
+# Fibonacci de position : jambe de référence et profondeur d'un prix dans la jambe (S2 : premium / discount).
 # ======================================================================================================================
 
 FIB_GOLDEN_FROM = 0.5      # 50 % -> 61,8 % : « Golden Zone »
@@ -136,14 +136,6 @@ def fib_side_word(d):
     return "discount" if d == "BUY" else "premium"
 
 
-def fib_pullback_depth(origin, end, extreme):
-    """Profondeur d'un repli, en espace miroir « baissier » : jambe qui descend de `origin` (haut) à `end` (bas), repli qui remonte
-    jusqu'à `extreme`. 0 = pas de repli, 0,5 = la moitié de la jambe, 1 = jambe entièrement reprise. None si la jambe est nulle."""
-    if origin <= end:
-        return None
-    return (extreme - end) / (origin - end)
-
-
 def _flag(name, default=True):
     v = (os.getenv(name) or "").strip().lower()
     return default if v == "" else v not in ("0", "false", "non", "off", "no")
@@ -188,22 +180,22 @@ OBST_MIN_RR = 1.0                        # obstacle opposé à moins de 1 R de l
 OBST_BUF_ATR = 0.1                       # TP1 placé 0,1 ATR H1 avant l'obstacle
 # Tendance de S5 : définition unique de setups.py (BOS par clôture, âge en jambes), partagée avec S2 et les alertes.
 
-# --- S4 CRT (Candle Range Theory) pur : voir setups.py ---
+# --- S3 CRT (Candle Range Theory) pur : voir setups.py ---
 CRT_REFS = ("D1", "H4")             # bougies de référence C1 / C2 (range daily et H4, plus de H1) ; la confirmation est toujours en M15
 CRT_PIVOT_BARS = 16                 # le swing M15 cassé date de 16 bougies M15 (4 h) au plus avant l'extrême de C2
 CRT_SL_BUF_ATR = 0.15               # marge du stop au-delà de l'extrême de C2 (x ATR M15)
 CRT_TP3_EXT = 0.5                   # TP3 = bord opposé de C1 + 50 % de son range
-# --- Garde-fous de S4 (CRT) : TP1 = milieu de C1, ratio minimal mesuré sur TP1 comme les autres stratégies
-CRT_MIN_RR = _num("S4_MIN_RR", S5_MIN_RR)       # ratio gain/risque minimal au milieu du range de C1 (TP1) : le même que S1 par défaut (0 = désactivé)
+# --- Garde-fous de S3 (CRT) : TP1 = milieu de C1, ratio minimal mesuré sur TP1 comme les autres stratégies
+CRT_MIN_RR = _num("S3_MIN_RR", S5_MIN_RR)       # ratio gain/risque minimal au milieu du range de C1 (TP1) : le même que S1 par défaut (0 = désactivé)
 CRT_MIN_RANGE_ATR, CRT_MAX_RANGE_ATR = 0.8, 3.5  # taille raisonnable du range de C1 (x ATR du timeframe de référence)
-CRT_SWEEP_MIN_ATR = _num("S4_SWEEP_MIN_ATR", 0.1)   # C2 doit dépasser le bord de C1 d'au moins 0,1 ATR du timeframe de référence (0 = n'importe quelle mèche)
+CRT_SWEEP_MIN_ATR = _num("S3_SWEEP_MIN_ATR", 0.1)   # C2 doit dépasser le bord de C1 d'au moins 0,1 ATR du timeframe de référence (0 = n'importe quelle mèche)
 CRT_LIMIT_MAX_ATR = 1.5                          # ordre limite à plus de 1,5 ATR M15 du prix : signal écarté
 CRT_CHASE_ATR = 0.75                             # au marché : le prix ne doit pas avoir fui de plus de 0,75 ATR M15 de la clôture de déclenchement
-CRT_MAX_AGE_MIN = _num("S4_MAX_AGE_MIN", 20.0)   # déclencheur de plus de 20 minutes : signal écarté (0 = désactivé)
-CRT_CONTEXT_ALIGN = _flag("S4_CONTEXT_ALIGN", True)  # pas contre une tendance H4 ou D1 claire
+CRT_MAX_AGE_MIN = _num("S3_MAX_AGE_MIN", 20.0)   # déclencheur de plus de 20 minutes : signal écarté (0 = désactivé)
+CRT_CONTEXT_ALIGN = _flag("S3_CONTEXT_ALIGN", True)  # pas contre une tendance H4 ou D1 claire
 
-# --- Timeframe de confirmation / d'entrée, par stratégie : M15 ou M5 (variables S1_CONFIRM_TF ... S4_CONFIRM_TF) ---
-# Vide = défaut : M15 pour S1 (cascade selon INTRADAY), S3, S4 ; S2 suit INTRADAY (M15 si actif, sinon M5).
+# --- Timeframe de confirmation / d'entrée, par stratégie : M15 ou M5 (variables S1_CONFIRM_TF, S2_CONFIRM_TF, S3_CONFIRM_TF pour CRT) ---
+# Vide = défaut : M15 pour S1 (cascade selon INTRADAY) et S3 (CRT) ; S2 suit INTRADAY (M15 si actif, sinon M5).
 # M5 : la cassure de structure, le bloc d'ordre, le FVG, le stop et le suivi de fraîcheur se calculent sur les bougies M5 (cadre H4/H1
 # inchangé) : entrée plus précoce et stop plus serré, mais plus de bruit, et le spread pèse davantage. Les durées exprimées en bougies
 # M15 sont converties (x 3 en M5) par bars().
@@ -214,12 +206,11 @@ def _tf(name):
 
 S1_CONFIRM_TF = _tf("S1_CONFIRM_TF")
 S2_CONFIRM_TF = _tf("S2_CONFIRM_TF")
-S3_CONFIRM_TF = _tf("S3_CONFIRM_TF")
-S4_CONFIRM_TF = _tf("S4_CONFIRM_TF")
+S3_CONFIRM_TF = _tf("S3_CONFIRM_TF")                 # CRT
 
 
 def confirm_tf(code):
-    """Timeframe de confirmation de la stratégie `code` (S2, S3, S4) : 'M15' ou 'M5' ; vide = défaut."""
+    """Timeframe de confirmation de la stratégie `code` (S1, S2, S3) : 'M15' ou 'M5' ; vide = défaut."""
     v = globals().get(f"{code}_CONFIRM_TF") or ""
     if v in ("M15", "M5"):
         return v
@@ -313,6 +304,28 @@ def session_name(epoch):
     return "Hors session"
 
 
+def _hm(name, default):
+    """Heure « HH:MM » d'une variable d'environnement, en minutes depuis minuit (défaut si absente ou invalide)."""
+    try:
+        h, m = (os.getenv(name) or "").strip().split(":")
+        return int(h) * 60 + int(m)
+    except ValueError:
+        return default
+
+
+S2_QUIET = (_hm("S2_QUIET_FROM", 16 * 60 + 45), _hm("S2_QUIET_UNTIL", 2 * 60))   # heure de New York : fermeture NY (16h45) -> ouverture de Londres (02h00)
+
+
+def s2_quiet(epoch):
+    """Vrai si l'instant (heure de New York) tombe dans la fenêtre sans alerte de S2 : après la fermeture de New York."""
+    a, b = S2_QUIET
+    if not S2_SESSION_FILTER or a == b:
+        return False
+    dt = datetime.fromtimestamp(epoch, NY)
+    m = dt.hour * 60 + dt.minute
+    return (a <= m < b) if a < b else (m >= a or m < b)
+
+
 def asia_window(now):
     """(début, fin) en epoch de la plage asiatique en cours ou la plus récente : 20h00 -> 02h00 New York."""
     dt = datetime.fromtimestamp(now, NY)
@@ -340,11 +353,11 @@ def build_levels(d, entry, sl, a_ltf, tps=None):
 # --- Ordres limites (entrée au retest d'une zone plutôt qu'au marché) ---
 LIMIT_OB_FRACTION = 0.0     # bloc d'ordre : 0 = bord proche (extrémité touchée en premier), 0,5 = milieu, 1 = bord lointain
 LIMIT_FVG_FRACTION = 0.5    # FVG : 0,5 = milieu du déséquilibre
-LIMIT_TTL = {"S2": 3600, "S5": 86400, "S3": 10800, "S4": 3600, "S9": 3600}
+LIMIT_TTL = {"S2": 3600, "S5": 86400, "S3": 3600, "S4": 3600}   # S5 : code interne de Pullback (S1) ; S3 : CRT ; S4 : Market Profiles
 
 
 def _stop_mode(name):
-    """Placement du stop de S1, S2 et S4 : « sweep » (défaut : au-delà de l'extrême du sweep) ou « ob » (à l'autre extrémité de la zone
+    """Placement du stop de S1, S2 et S3 (CRT) : « sweep » (défaut : au-delà de l'extrême du sweep) ou « ob » (à l'autre extrémité de la zone
     d'entrée : bloc d'ordre, sinon FVG). Variable propre à la stratégie, sinon STOP_MODE."""
     v = (os.getenv(name) or os.getenv("STOP_MODE") or "sweep").strip().lower()
     return "ob" if v in ("ob", "bloc", "bloc d'ordre", "order block", "orderblock") else "sweep"
@@ -352,7 +365,7 @@ def _stop_mode(name):
 
 S1_STOP_MODE = _stop_mode("S1_STOP_MODE")
 S2_STOP_MODE = _stop_mode("S2_STOP_MODE")
-S4_STOP_MODE = _stop_mode("S4_STOP_MODE")
+S3_STOP_MODE = _stop_mode("S3_STOP_MODE")                 # variable de CRT (S3)
 
 
 def zone_stop(d, zone, a):
@@ -456,30 +469,20 @@ def _signal(strat, label, d, price, lv, ltf, ltf_n, key, details, **kw):
 S2_FRESH_LEVELS = True      # un niveau déjà pris (mèche au-delà depuis sa formation) n'est plus de la liquidité ; False = désactivé
 S2_HTF_BARS = {"H4": 40, "H1": 72}   # profondeur de recherche des zones (bougies clôturées)
 S2_HTF_TOL_ATR = 0.25       # tolérance de contact avec la zone, en ATR H1
-S2_BIAS_FILTER = _flag("S2_BIAS_FILTER", True)   # trade seulement dans le sens du biais de structure (BOS) H4, sinon H1 si le H4 n'a pas de tendance claire
+S2_SESSION_FILTER = _flag("S2_SESSION_FILTER", True)   # False : S2 peut alerter à toute heure (seules les fenêtres de guard.py restent)
+S2_BIAS_FILTER = _flag("S2_BIAS_FILTER", False)  # True : trade seulement dans le sens du biais de structure (BOS) H4 ; False (défaut) : les deux sens, le signal indique s'il est contre le biais
 S2_HTF_ZONE = _flag("S2_HTF_ZONE", True)         # le sweep doit toucher un bloc d'ordre / FVG H4 ou H1 non retesté, dans le sens du trade
-S2_FIB_FILTER = _flag("S2_FIB_FILTER", True)       # l'entrée doit être du bon côté de l'équilibre (50 %) de la jambe H4/H1 : discount pour un achat, premium pour une vente
+S2_FIB_FILTER = _flag("S2_FIB_FILTER", False)      # True : l'entrée doit être du bon côté de l'équilibre (50 %) de la jambe H4/H1 : discount pour un achat, premium pour une vente
 S2_FIB_MIN_DEPTH = 0.5                             # profondeur minimale de l'entrée dans la jambe (0,5 = équilibre)
 S2_FIB_MIN_ATR = 1.5                               # jambe d'au moins 1,5 x ATR H1 ; plus petite, le filtre n'a pas d'information et laisse passer
 S2_FIB_BARS = {"H4": 60, "H1": 120}                # profondeur de recherche de la jambe (bougies clôturées avant le sweep)
 S2_FIB_SWING_N = {"H4": 2, "H1": 3}                # fractale des swings de la jambe
-S2_MIN_RR = _num("S2_MIN_RR", S5_MIN_RR)           # ratio gain/risque minimal sur TP1 : le même que S1 par défaut (0 = désactivé)
+S2_MIN_RR = _num("S2_MIN_RR", 2.0)                 # ratio gain/risque minimal sur TP1 : 2 par défaut (S1 reste à 3 ; 0 = désactivé)
 S2_RISK_CAP_H1 = _num("S2_RISK_CAP_H1", 1.5)       # risque maximal en ATR H1 (0 = aucun)
 S2_LIMIT_MAX_ATR = 1.5                             # ordre limite à plus de 1,5 ATR de confirmation du prix actuel : signal écarté
 S2_CHASE_ATR = 0.75                                # au marché : le prix ne doit pas avoir fui de plus de 0,75 ATR de la clôture de déclenchement
 S2_MAX_AGE_MIN = _num("S2_MAX_AGE_MIN", 20.0)      # signal plus vieux (clôture du déclencheur) que 20 minutes : écarté (0 = désactivé)
 S2_SWEEP_MIN_ATR = _num("S2_SWEEP_MIN_ATR", 0.1)   # la mèche doit dépasser le niveau d'au moins 0,1 ATR M15 (0 = n'importe quelle mèche)
-# --- Garde-fous de S3 (figures et retournement)
-S3_MAX_AGE_MIN = _num("S3_MAX_AGE_MIN", 20.0)      # déclencheur de plus de 20 minutes : signal écarté (0 = désactivé)
-S3_SESSIONS = ("Londres", "New York", "London Close")   # session du déclencheur (marchés à séance seulement)
-S3_CHASE_ATR = 0.75                                # au marché : le prix ne doit pas avoir fui de plus de 0,75 ATR de la clôture de déclenchement
-S3_LIMIT_MAX_ATR = 1.5                             # figures : zone de l'ordre limite à plus de 1,5 ATR M15 du prix : signal écarté
-S3_FIGURE_OBST_TFS = ("H4",)                       # figures : seuls les obstacles H4 (et la veille) comptent devant l'objectif, pas les pivots ni zones H1
-S3_CONTEXT_ALIGN = _flag("S3_CONTEXT_ALIGN", True)  # figure de continuation : pas contre une tendance H4 ou D1 claire
-S3_FIB_FILTER = _flag("S3_FIB_FILTER", True)       # figures de continuation : le repli (la figure) ne doit pas reprendre plus de 61,8 % de la jambe précédente
-S3_FIB_CONT_MAX = 0.618                            # profondeur maximale du repli
-S3_FIB_CAP_TP3 = _flag("S3_FIB_CAP_TP3", True)     # figures de retournement : TP3 plafonné à l'origine de la jambe précédente (100 % Fibonacci)
-S3_FIB_LB = 60                                     # recherche de l'origine de la jambe précédente : 60 bougies avant la figure
 S2_HTF_UNTOUCHED = True     # zone non retestée : aucune mèche n'est revenue dedans ; False = seulement non invalidée par une clôture
 S2_LIQ_TARGETS = True       # TP1 / TP2 / TP3 sur la liquidité opposée intacte (sinon objectifs fixes 1 R / 2 R / 3 R)
 S2_TP_MIN_R, S2_TP_MAX_R = 1.0, 6.0  # une liquidité opposée n'est retenue comme objectif qu'entre 1 R et 6 R
@@ -721,8 +724,11 @@ def _s2_setup(cand, bias, bias_tf, levels, h4, h4c, h1c, m15c, cf, cfc, cf_n, a_
     if not is_displacement(tc, avg, DISP_MULT):
         return None
     sess = session_name(tc["epoch"])
-    if kz and sess not in S2_SESSIONS:
-        return None                                   # cassure hors killzone
+    if kz and S2_SESSIONS and sess not in S2_SESSIONS:
+        return None                                   # cassure hors killzone (si des killzones sont configurées)
+    if kz and s2_quiet(tc["epoch"] + GRAN[cf_n]):
+        funnel["S2_session"] += 1
+        return None                                   # après la fermeture de New York : pas d'alerte
     zone = htf_zone_hit(h4c, h1c, d, sc["epoch"], px, ext_px, a_h1) if S2_HTF_ZONE else None
     if S2_HTF_ZONE and zone is None:
         return None                                   # le sweep n'a touché aucune zone d'intérêt H1/H4
@@ -784,7 +790,7 @@ def _s2_setup(cand, bias, bias_tf, levels, h4, h4c, h1c, m15c, cf, cfc, cf_n, a_
     if fib_info:
         details.append(f"✅ Entrée en {fib_side_word(d)} de la jambe {fib_info['tf']} (Fibonacci {fib_info['r'] * 100:.0f} % : {fib_zone_name(fib_info['r'])})")
     if kz:
-        details.append(f"✅ Killzone {sess}")
+        details.append(f"✅ Killzone {sess}" if S2_SESSIONS else f"🕒 {sess}")
     details += tp_lines
     zones = [{"lo": zone["lo"], "hi": zone["hi"], "label": f"{zone['kind']} {zone['tf']}",
               "kind": "ob" if zone["kind"] == "OB" else "fvg"}] if zone else []
@@ -1173,24 +1179,24 @@ def scan_s5(provide, now, funnel, dec=2, kz=True, mode="market"):
 
 
 
-# --- S9 Market Profiles (profiles.py : range -> manipulation -> expansion, 5 setups A à E, prix pur) ---
-S9_TF = (os.getenv("S9_TF") or "M15").strip().upper()          # timeframe d'analyse et d'entrée : M5, M15 (défaut) ou H1
-if S9_TF not in ("M5", "M15", "H1"):
-    S9_TF = "M15"
-S9_BARS = int(_num("S9_BARS", 160))                            # nombre de bougies clôturées analysées
-S9_MIN_RR = _num("S9_MIN_RR", S5_MIN_RR)                       # ratio gain/risque minimal sur TP1 (celui de S1 par défaut, 0 = 3)
-S9_RISK_CAP_H1 = _num("S9_RISK_CAP_H1", 2.0)                   # risque maximal en unités H1 (0 = aucun)
-S9_SL_BUF_ATR = _num("S9_SL_BUF_ATR", BUF_ATR)                 # marge du stop au-delà de l'extrême du sweep (en unités ; 0 = stop exactement sur l'extrême)
-S9_LIMIT_MAX_ATR = 1.5                                         # ordre limite à plus de 1,5 unité du prix : signal écarté
-S9_CHASE_ATR = 0.75                                            # au marché : le prix ne doit pas avoir fui de plus de 0,75 unité du déclencheur
-S9_MAX_AGE_MIN = _num("S9_MAX_AGE_MIN", 20.0)                  # déclencheur plus vieux que 20 minutes : signal écarté (0 = désactivé)
-S9_SESSION_FILTER = _flag("S9_SESSION_FILTER", True)           # marchés à séance : déclencheur à Londres, New York ou London Close
-S9_SESSIONS = ("Londres", "New York", "London Close")
-S9_TP_MAX_R = 6.0                                              # liquidité retenue pour TP2/TP3 : au plus 6 R au-delà de TP1
-S9_H4_SWINGS = 6                                               # niveaux clés H4 : derniers sommets et creux (fractale de 2)
+# --- S4 Market Profiles (profiles.py : range -> manipulation -> expansion, 5 setups A à E, prix pur) ---
+S4_TF = (os.getenv("S4_TF") or "M15").strip().upper()          # timeframe d'analyse et d'entrée : M5, M15 (défaut) ou H1
+if S4_TF not in ("M5", "M15", "H1"):
+    S4_TF = "M15"
+S4_BARS = int(_num("S4_BARS", 160))                            # nombre de bougies clôturées analysées
+S4_MIN_RR = _num("S4_MIN_RR", S5_MIN_RR)                       # ratio gain/risque minimal sur TP1 (celui de S1 par défaut, 0 = 3)
+S4_RISK_CAP_H1 = _num("S4_RISK_CAP_H1", 2.0)                   # risque maximal en unités H1 (0 = aucun)
+S4_SL_BUF_ATR = _num("S4_SL_BUF_ATR", BUF_ATR)                 # marge du stop au-delà de l'extrême du sweep (en unités ; 0 = stop exactement sur l'extrême)
+S4_LIMIT_MAX_ATR = 1.5                                         # ordre limite à plus de 1,5 unité du prix : signal écarté
+S4_CHASE_ATR = 0.75                                            # au marché : le prix ne doit pas avoir fui de plus de 0,75 unité du déclencheur
+S4_MAX_AGE_MIN = _num("S4_MAX_AGE_MIN", 20.0)                  # déclencheur plus vieux que 20 minutes : signal écarté (0 = désactivé)
+S4_SESSION_FILTER = _flag("S4_SESSION_FILTER", True)           # marchés à séance : déclencheur à Londres, New York ou London Close
+S4_SESSIONS = ("Londres", "New York", "London Close")
+S4_TP_MAX_R = 6.0                                              # liquidité retenue pour TP2/TP3 : au plus 6 R au-delà de TP1
+S4_H4_SWINGS = 6                                               # niveaux clés H4 : derniers sommets et creux (fractale de 2)
 
-STRAT_LABELS = {"S1": "Pullback", "S2": "Sweep + CHoCH", "S3": "Figures & Retournement", "S4": "CRT", "S9": "Market Profiles"}
-# Codes : S1 à S4, puis S9 (S5 à S8 ne sont pas utilisés).
+STRAT_LABELS = {"S1": "Pullback", "S2": "Sweep + CHoCH", "S3": "CRT", "S4": "Market Profiles"}
+# Codes : S1 à S4 sans trou. Anciens codes : S5 = Pullback, S9 = Market Profiles ; l'ancienne S3 (Figures & Retournement) est supprimée.
 
 
 def scan_pullback(provide, now, funnel, dec=2, kz=True, mode="market"):
@@ -1202,32 +1208,26 @@ def scan_pullback(provide, now, funnel, dec=2, kz=True, mode="market"):
     return out
 
 
-def scan_s3(*args, **kwargs):
-    """S3 Figures & Retournement (setups.py). Import à l'appel : setups.py importe ce module."""
-    import setups
-    return setups.scan_s3(*args, **kwargs)
-
-
 def scan_crt(*args, **kwargs):
-    """S4 CRT (setups.py). Import à l'appel : setups.py importe ce module."""
+    """S3 CRT (setups.py). Import à l'appel : setups.py importe ce module."""
     import setups
     return setups.scan_crt(*args, **kwargs)
 
 
 def scan_profiles(*args, **kwargs):
-    """S9 Market Profiles (setups.py, profiles.py). Import à l'appel : setups.py importe ce module."""
+    """S4 Market Profiles (setups.py, profiles.py). Import à l'appel : setups.py importe ce module."""
     import setups
     return setups.scan_profiles(*args, **kwargs)
 
 
-STRATEGIES = [("S1", scan_pullback), ("S2", scan_s2), ("S3", scan_s3), ("S4", scan_crt), ("S9", scan_profiles)]
+STRATEGIES = [("S1", scan_pullback), ("S2", scan_s2), ("S3", scan_crt), ("S4", scan_profiles)]
 
 
 def scan_all(provide, now, funnel, only=None, dec=2, kz=True, modes=None):
     """Évalue les stratégies (toutes, ou celles de `only`) et renvoie les signaux trouvés.
     dec : décimales du prix de l'actif (affichage uniquement).
     modes : {"S1": "limit"|"market", ...} (défaut : marché).
-    kz : False pour ne pas limiter S2 et S3 aux heures de session (inutilisé pour l'or)."""
+    kz : False pour ne pas appliquer les fenêtres horaires de S1, S2 et S4 (inutilisé pour l'or)."""
     out = []
     for name, fn in STRATEGIES:
         if only and name not in only:

@@ -1,7 +1,7 @@
-"""Bot or (XAUUSD) : 5 stratégies price action, données Deriv, alertes Telegram, suivi des trades.
+"""Bot or (XAUUSD) : 4 stratégies price action, données Deriv, alertes Telegram, suivi des trades.
 
 Stratégies (détail dans le README, section Stratégies) :
-  S1 Pullback (structure + Fibonacci) · S2 Sweep + CHoCH · S3 Figures & Retournement · S4 CRT
+  S1 Pullback (structure + Fibonacci) · S2 Sweep + CHoCH · S3 CRT · S4 Market Profiles
 Un passage = un scan (à déclencher toutes les 5 minutes par un cron externe, voir README.md).
 """
 import json, os, random, sys, time
@@ -45,19 +45,23 @@ def spread_pct(sym=GOLD):
     return SPREAD_DEFAULT
 
 
+LEGACY_CODES = {"S9": "S4"}   # ancien code de Market Profiles (sans ambiguïté) ; « S3 » et « S4 » ont changé de sens : voir le README
+
+
 def canon_codes(codes, known_only=False):
-    """Codes de stratégie sans doublon, dans l'ordre ; avec known_only, seuls les codes connus sont gardés."""
+    """Codes de stratégie sans doublon, dans l'ordre (l'ancien code S9 est lu comme S4) ; avec known_only, seuls les codes connus sont gardés."""
     out = []
     for c in codes:
+        c = LEGACY_CODES.get(c, c)
         if c not in out and (c in S.STRAT_LABELS or not known_only):
             out.append(c)
     return out
 
 
-ENTRY_MODES = {"S1": "limit", "S2": "limit", "S3": "limit", "S4": "limit", "S9": "limit"}   # défaut : ordres limites partout
-for _p in (os.getenv("ENTRY_MODES") or "").split(","):                         # ex. ENTRY_MODES="S2:market,S3:market"
+ENTRY_MODES = {c: "limit" for c in S.STRAT_LABELS}                                        # défaut : ordres limites partout
+for _p in (os.getenv("ENTRY_MODES") or "").split(","):                         # ex. ENTRY_MODES="S2:market,S3:market" (S3 = CRT)
     _k, _, _v = _p.partition(":")
-    _k = _k.strip().upper()
+    _k = LEGACY_CODES.get(_k.strip().upper(), _k.strip().upper())
     if _k in ENTRY_MODES and _v.strip().lower() in ("limit", "market"):
         ENTRY_MODES[_k] = _v.strip().lower()
 ENTRY_MODE = (os.getenv("ENTRY_MODE") or "auto").strip().lower()   # auto : ENTRY_MODES ; market ou limit : force toutes les stratégies
@@ -90,11 +94,21 @@ def dec_of(sym):
 
 
 def parse_strategies(text):
-    """'S1,S2' -> ['S1', 'S2'] ; vide ou absent -> toutes les stratégies (S1, S2, S3, S4 ; GitHub transmet une chaîne vide si la variable n'existe pas)."""
-    return canon_codes([x.strip().upper() for x in (text or "").split(",") if x.strip()]) or ["S1", "S2", "S3", "S4", "S9"]
+    """'S1,S2' -> ['S1', 'S2'] ; vide ou absent -> toutes les stratégies (S1 à S4 ; GitHub transmet une chaîne vide si la variable n'existe pas)."""
+    return canon_codes([x.strip().upper() for x in (text or "").split(",") if x.strip()]) or list(S.STRAT_LABELS)
 
 
 ENABLED = parse_strategies(os.getenv("STRATEGIES"))
+
+
+LEGACY_FIGURE_VARS = ("S3_FIB_FILTER", "S3_FIB_CAP_TP3", "S3_REV_MIN_RR")   # réglages de l'ancienne S3 (Figures & Retournement), supprimée
+
+
+def legacy_variables(environ=None):
+    """Variables GitHub d'avant la renumérotation qui ne sont plus lues : S9_* (Market Profiles, devenu S4_*), S6_* et S7_* et les réglages de
+    l'ancienne S3 (Figures & Retournement). Les noms S3_* et S4_* encore valides (CRT, Market Profiles) ne peuvent pas être signalés : ils ont changé de sens."""
+    env = os.environ if environ is None else environ
+    return sorted(k for k, v in env.items() if v and (k[:3] in ("S6_", "S7_", "S9_") or k in LEGACY_FIGURE_VARS))
 
 
 def parse_confluence(text, default=60.0):
@@ -572,6 +586,12 @@ def build_chart(sig, ltf_candles):
             "candles": charts.candles_slice(ltf_candles), "lines": lines + sig["lines"], "zones": sig["zones"]}
 
 
+def trade_code(t):
+    """Code actuel de la stratégie d'un trade enregistré : par son libellé (stable d'une renumérotation à l'autre), sinon par le code stocké
+    si celui-ci n'a pas changé de sens (S1, S2). Un trade de la stratégie supprimée (Figures & Retournement, ex-S3) renvoie None."""
+    return LABEL_CODE.get(t.get("cascade")) or {"S1": "S1", "S2": "S2"}.get(t.get("strat"))
+
+
 def confluence_with(sig, tr, batch, now):
     """[(code, libellé, âge en minutes)] des AUTRES stratégies d'accord avec ce signal (même actif, même sens) :
     trades en attente ou ouverts alertés depuis moins de CONFLUENCE_MIN minutes, et signaux trouvés au même scan
@@ -581,7 +601,7 @@ def confluence_with(sig, tr, batch, now):
         return []
     own, found = sig.get("strat"), {}
     for t in T.active_list(tr):
-        code = LABEL_CODE.get(t.get("cascade")) or t.get("strat")
+        code = trade_code(t)
         age = now - t["t0"]
         if t["sym"] == sig["sym"] and t["dir"] == sig["dir"] and code and code != own and 0 <= age <= win:
             found[code] = min(age / 60, found.get(code, age / 60))
@@ -607,7 +627,7 @@ def add_confluence(sig, tr, batch, now):
 def reversal_alert(sym, provide, now, state):
     """Texte d'une alerte d'information « retournement possible » (voir setups.py), ou None. Un message par sweep ; ni ordre,
     ni suivi, ni contrôle de risque. """
-    if not SU.ENABLED or "S3" in ENABLED:   # S3 envoie le même retournement en ordre
+    if not SU.ENABLED:
         return None
     rev = SU.detect(provide, now)
     if not rev:
@@ -952,6 +972,8 @@ def main():
     cache, state = load(CACHE_FILE), load(STATE_FILE)
     tr, g = T.load_trades(), G.load_guard()
     api, funnel = Deriv(), Counter()
+    if legacy_variables():
+        print(f"Variables ignorées (anciens noms ou stratégie supprimée) : {', '.join(legacy_variables())}")
     if not (TG_TOKEN and TG_CHAT):
         print("ATTENTION : secret Telegram manquant ou vide (TELEGRAM_TOKEN / TELEGRAM_CHAT_ID)")
     try:
@@ -994,7 +1016,10 @@ def main():
             notify(G.build_report(g, tr, now))
             G.report_sent(g, now)
         if os.getenv("NOTIFY_OK") == "1":
+            old = legacy_variables()
+            warn = f"⚠️ Variables ignorées (anciens noms ou stratégie supprimée) : {', '.join(old)}. Voir README § 4.\n" if old else ""
             notify(f"Bot OK : {len(SYMBOLS)} actifs, {funnel['alert']} alerte(s). Stratégies actives : {', '.join(ENABLED)}.\n"
+                   f"{warn}"
                    f"{unit_check_text(api, cache)}\n"
                    f"Entonnoir : {G.funnel_text(funnel)}\n{T.stats_text(tr, now, groups=('cascade',))}")
         print(f"Scan terminé : {len(SYMBOLS)} actifs, {funnel['alert']} alerte(s). Entonnoir : {G.funnel_text(funnel)}")

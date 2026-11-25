@@ -1,7 +1,7 @@
-"""Setups de la tendance, du retournement, de S3 (Figures & Retournement) et de S4 (CRT). Toutes les règles sont décrites dans le README (section Stratégies).
+"""Setups de la tendance, de l'alerte de retournement, de S3 (CRT) et de S4 (Market Profiles). Toutes les règles sont décrites dans le README (section Stratégies).
 
-Ce module regroupe quatre blocs, dans cet ordre : tendance (récapitulatif journalier et alerte), alerte / ordre de retournement,
-figures chartistes (S3) et CRT (S4). Il importe `strategies` (primitives SMC, réglages, constantes) ; `strategies` ne l'importe qu'à l'appel.
+Ce module regroupe quatre blocs, dans cet ordre : tendance (récapitulatif journalier et alerte), alerte de retournement (information seulement),
+CRT (S3) et Market Profiles (S4). Il importe `strategies` (primitives SMC, réglages, constantes) ; `strategies` ne l'importe qu'à l'appel.
 
 == TENDANCE ==
 Tendance et âge de la tendance, pour le récapitulatif journalier (aucune alerte de trade n'en dépend).
@@ -33,20 +33,9 @@ Une tendance H4 mûre peut se retourner. On n'alerte que lorsque plusieurs élé
 Le raisonnement est écrit pour une tendance haussière ; une tendance baissière est traitée en miroir (prix inversés).
 
 
-== FIGURES (S3) ==
-S3 Chart Patterns : figures chartistes de retournement et de continuation (voir le README).
-
-Cadre intraday du bot : la figure est détectée sur les bougies clôturées H1 ou H4 (obstacles majeurs), la cassure de sa
-ligne clé est CONFIRMÉE en M15 (clôture M15 au-delà de la ligne, la bougie précédente encore en deçà).
-Module autonome (aucune entrée/sortie réseau), même interface que les autres stratégies : scan_s3(provide, now, funnel, ...).
-
-Toutes les figures sont écrites pour une cassure BAISSIÈRE ; les figures haussières s'obtiennent en retournant les prix
-(miroir) : même code pour les deux sens.
-
-
-== CRT (S4) ==
-S4 CRT (Candle Range Theory) pur : le range d'une bougie de référence (C1) est balayé par la bougie suivante (C2), qui clôture à
-l'intérieur de ce range ; on entre en M15 (ou M5, S4_CONFIRM_TF) sur la cassure de structure qui suit la clôture de C2, vers le milieu puis le bord opposé de C1.
+== CRT (S3) ==
+S3 CRT (Candle Range Theory) pur : le range d'une bougie de référence (C1) est balayé par la bougie suivante (C2), qui clôture à
+l'intérieur de ce range ; on entre en M15 (ou M5, variable S3_CONFIRM_TF) sur la cassure de structure qui suit la clôture de C2, vers le milieu puis le bord opposé de C1.
 
   C1  bougie de référence D1 (range daily) ou H4 (la dernière clôturée avant C2) : son range est la jambe de livraison.
   C2  bougie clôturée qui dépasse le plus haut (vente) ou le plus bas (achat) de C1 et clôture DANS le range de C1.
@@ -56,7 +45,7 @@ l'intérieur de ce range ; on entre en M15 (ou M5, S4_CONFIRM_TF) sur la cassure
           bloc d'ordre ou le FVG de ce timeframe s'il y en a un. Stop : au-delà de l'extrême de C2. Objectifs : milieu de C1, bord opposé de C1,
           bord opposé + 50 % du range ; ratio minimal 1 pour 3 calculé sur TP1 (milieu de C1), comme les autres stratégies.
 
-Les réglages (CRT_*) sont dans strategies.py. strategies importe ce module en fin de fichier : on n'importe donc strategies qu'à
+Les réglages (CRT_*, variables S3_*) sont dans strategies.py. strategies importe ce module en fin de fichier : on n'importe donc strategies qu'à
 l'appel, pas au chargement.
 
 """
@@ -342,565 +331,15 @@ def message(rev, name, dec, clock=""):
     return "\n".join(lines)
 
 
-# ----------------------------- Retournement : l'alerte devient un ordre (partie « retournement » de S3) -----------------------------
-def _f(name, default):
-    try:
-        return float(os.getenv(name) or default)
-    except ValueError:
-        return float(default)
-
-
+# Nombre de signes d'essoufflement exigés (sur 2) pour l'alerte de retournement
 try:
     MIN_SIGNS = int(os.getenv("REVERSAL_MIN_SIGNS") or 1)             # signes d'essoufflement exigés (sur 2)
 except ValueError:
     MIN_SIGNS = 1
 
 
-def _num(name, default):
-    try:
-        return float(os.getenv(name) or default)
-    except ValueError:
-        return float(default)
-
-
-S7_RISK_CAP_ATR = _num("S7_RISK_CAP_ATR", 3.0)       # risque maximal : 3 x ATR H1
-S7_ENTRY_MAX_ATR = _num("S7_ENTRY_MAX_ATR", 1.0)     # retest du niveau cassé à plus de 1 ATR H1 du prix : signal écarté
-S3_REV_MIN_RR = _num("S3_REV_MIN_RR", S.S5_MIN_RR)   # ratio minimal sur TP1 : le même que S1 et S2 par défaut (0 = désactivé)
-S7_SL_BUF_ATR = 0.2                                 # marge du stop au-delà de l'extrême du sweep (en ATR H1)
-S7_LIMIT_TTL = 7200                                 # validité de l'ordre limite, en secondes
-STRAT, LABEL = "S3", "Figures & Retournement"
-
-
-def reversal_signal(provide, now, funnel, dec=2, mode="market", rev=None):
-    """Retournement possible (detect) en ordre : mêmes conditions que l'alerte d'information. Entrée au retest du dernier creux
-    (sommet) H1 cassé, stop au-delà de l'extrême du sweep, objectifs 1R / 2R / 3R. Contre une tendance H4 mûre : taille réduite
-    conseillée. `rev` : résultat de detect() déjà calculé (sinon calculé ici). Retourne un signal, ou None."""
-    rev = rev or detect(provide, now)
-    if not rev:
-        return None
-    funnel["S3_retournement"] += 1
-    cf_n = S.confirm_tf("S3")                      # timeframe d'entrée : M15 (défaut) ou M5 (m15 / m15c / a_m15 : bougies et ATR de ce timeframe)
-    m15, h1 = provide(cf_n), provide("H1")
-    if not m15 or not h1:
-        return None
-    m15c = m15[:-1]
-    a_m15, a_h1 = S.unit(m15c), S.unit(h1[:-1])
-    if a_m15 <= 0 or a_h1 <= 0:
-        return None
-    d, price = rev["dir"], m15[-1]["close"]
-    sl = rev["ext"] + (S7_SL_BUF_ATR * a_h1 if d == "SELL" else -S7_SL_BUF_ATR * a_h1)
-    otype, entry = S.pick_entry(d, price, rev["pivot"], sl, mode)
-    if otype != d:
-        if abs(price - entry) > S7_ENTRY_MAX_ATR * a_h1:
-            funnel["S3_stale"] += 1
-            return None                               # retest trop loin du prix
-    elif S.is_late(d, price, rev["pivot"], a_m15, S.S3_CHASE_ATR):
-        funnel["S3_stale"] += 1
-        return None                                   # le prix a déjà fui après la cassure
-    lv = S.build_levels(d, entry, sl, a_m15)
-    if lv is None:
-        return None
-    if S7_RISK_CAP_ATR and lv["risk"] > S7_RISK_CAP_ATR * a_h1:
-        funnel["S3_risque"] += 1
-        return None                                   # stop trop large pour la volatilité H1
-    # Objectifs sur la liquidité opposée intacte (comme S2) : TP1 = première liquidité entre 1 R et 6 R, TP2 / TP3 = les suivantes
-    # (sinon +1 R) ; sans liquidité, TP1 au ratio minimal (3 R) puis +1 R / +2 R. Un retournement vise la structure, pas des multiples génériques.
-    levels = S.liquidity_levels(h1[:-1], provide("D1"), m15c, now, a_h1) or []
-    targets = S.liquidity_targets(levels, m15c, d, entry, lv["risk"], a_m15)
-    lv["tp"], srcs = S.s2_tps(d, entry, lv["risk"], targets, S3_REV_MIN_RR)
-    tp_lines = [f"🎯 {lab} sur la liquidité {t[0]} ({px_tp:.{dec}f}, {abs(px_tp - entry) / lv['risk']:.1f} R)"
-                for lab, t, px_tp in zip(("TP1", "TP2", "TP3"), srcs, lv["tp"]) if t]
-    if not tp_lines:
-        tp_lines = [f"🎯 Pas de liquidité opposée intacte à 1-6 R : TP1 au ratio minimal ({S3_REV_MIN_RR or S.S2_FALLBACK_R:g} R), TP2 / TP3 à +1 R / +2 R"]
-    if S3_REV_MIN_RR and abs(lv["tp"][0] - entry) / lv["risk"] < S3_REV_MIN_RR:
-        funnel["S3_rr"] += 1
-        return None                                   # ratio gain/risque sur TP1 (première liquidité) sous le minimum
-    funnel["S3_signal"] += 1
-    word = {"BUY": "haussière", "SELL": "baissière"}[rev["trend_dir"]]
-    taken = "sommet" if d == "SELL" else "creux"
-    broke = "sous le dernier creux" if d == "SELL" else "au-dessus du dernier sommet"
-    return S._signal(
-        STRAT, LABEL, d, entry, lv, m15, cf_n, f"{rev['epoch']}",
-        [f"✅ Tendance H4 {word} mûre ({rev['legs']} jambes), encore intacte",
-         f"✅ Sweep : {taken} H1 {rev['level'][0]:.{dec}f} ({rev['level'][1]}) pris puis rejeté",
-         f"✅ Cassure de structure H1 : clôture {broke} ({rev['pivot']:.{dec}f})",
-         *(["✅ Essoufflement : " + " · ".join(rev["signs"])] if rev["signs"] else []),
-         "⚠️ Contre la tendance H4 : taille réduite conseillée"] + tp_lines,
-        lines=[{"y": rev["level"][0], "label": f"Sweep · {rev['level'][1]}", "kind": "sweep"},
-               {"y": rev["pivot"], "label": "Cassure de structure H1", "kind": "info"}],
-        inval=sl, short=f"Retournement · {rev['level'][1]}", trig=m15c[-1]["epoch"], otype=otype, price_now=price,
-        ttl=S7_LIMIT_TTL if otype != d else None,
-        entry_note=f"Ordre limite au retest du niveau cassé ({entry:.{dec}f})" if otype != d else "",
-        extra={"origine": "retournement", "contre_tendance": True, "niveau": rev["level"][1], "signes": len(rev["signs"]),
-               "tp": "liquidité" if any(srcs) else "fixe"})
-
 # ==========================================================================
-# FIGURES CHARTISTES (S3)
-# ==========================================================================
-
-PIVOT_K = int(_f("S6_PIVOT_K", 4))               # bougies de chaque côté d'un pivot
-MIN_SWING_ATR = _f("S6_MIN_SWING_ATR", 0.8)      # swing minimal entre deux pivots (en ATR du timeframe de la figure)
-TOL_ATR = _f("S6_TOL_ATR", 0.5)                  # tolérance de touche des lignes (en ATR)
-MIN_H_ATR = _f("S6_MIN_H_ATR", 1.5)              # hauteur minimale d'une figure (en ATR)
-BUF_ATR = _f("S6_BUF_ATR", 0.1)                  # marge de cassure (en ATR du timeframe de la figure)
-MAX_AGE = int(_f("S6_MAX_AGE", 40))              # âge max du dernier pivot (en bougies du timeframe de la figure)
-TREND_LB = int(_f("S6_TREND_LB", 30))
-TREND_ATR = _f("S6_TREND_ATR", 1.5)
-POLE_LB = int(_f("S6_POLE_LB", 20))
-POLE_ATR = _f("S6_POLE_ATR", 3.5)
-S3_OB_WINDOW = 12                                # le déplacement qui casse la ligne part de l'extrême des 12 dernières bougies avant la cassure
-TP_FRACTIONS = (0.5, 1.0, 1.5)                   # TP1/TP2/TP3 = ligne - fraction x hauteur de la figure (mât pour drapeau/fanion)
-S3_RISK_CAP_ATR = _f("S6_RISK_CAP_ATR", 5.0)       # risque maximal : 5 x ATR du timeframe de la figure (H1 ou H4)
-S3_MIN_RR = _f("S6_MIN_RR", 1.0)                 # ratio minimal vers TP3 (les objectifs sont des fractions de la hauteur : 1:3 sur TP2 serait inatteignable)
-S3_NOCONF_MIN_RR = _f("S6_NOCONF_MIN_RR", 1.5)   # figure de retournement SANS confluence avec l'alerte de retournement : ratio minimal vers TP3
-S3_CONF_RISK_FACTOR = _f("S6_CONF_RISK_FACTOR", 1.4)   # figure de retournement AVEC confluence : risque maximal multiplié par ce facteur
-S3_TFS = ("H1", "H4")                            # timeframes de détection des figures
-S3_LIMIT_TTL = 10800                              # validité de l'ordre limite (retest de la ligne cassée), en secondes
-FLAT = 0.025                                      # pente "plate" (ATR par bougie)
-PAR = 0.02                                        # écart de pente max pour un canal
-
-# ----------------------------- Outils géométriques -----------------------------
-def at(line, i):
-    (i1, v1), (i2, v2) = line
-    return v1 if i2 == i1 else v1 + (v2 - v1) * (i - i1) / (i2 - i1)
-
-
-def slope(line):
-    (i1, v1), (i2, v2) = line
-    return 0.0 if i2 == i1 else (v2 - v1) / (i2 - i1)
-
-
-def atr_last(h, l, c, n=14):
-    trs = [max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])) for i in range(1, len(c))]
-    seg = trs[-n:]
-    return sum(seg) / len(seg)
-
-
-def zigzag(h, l, k, minswing):
-    """Pivots confirmés (k bougies de chaque côté), alternés H/L, swings filtrés."""
-    raw = []
-    for i in range(k, len(h) - k):
-        is_h = h[i] >= max(h[i - k:i + k + 1]) and h[i] > max(h[i - k:i])
-        is_l = l[i] <= min(l[i - k:i + k + 1]) and l[i] < min(l[i - k:i])
-        if is_h and is_l:
-            continue
-        if is_h:
-            raw.append((i, h[i], "H"))
-        elif is_l:
-            raw.append((i, l[i], "L"))
-    z = []
-    for p in raw:
-        if not z:
-            z.append(p)
-            continue
-        last = z[-1]
-        if p[2] == last[2]:
-            if (p[2] == "H" and p[1] > last[1]) or (p[2] == "L" and p[1] < last[1]):
-                z[-1] = p
-        elif abs(p[1] - last[1]) >= minswing:
-            z.append(p)
-    return z
-
-
-def pretrend(c, start, atr):
-    d = c[start] - c[max(0, start - TREND_LB)]
-    if d > TREND_ATR * atr:
-        return "up"
-    if d < -TREND_ATR * atr:
-        return "down"
-    return "flat"
-
-
-# ----------------------------- Détecteurs (cassure baissière) -----------------------------
-def d_double_top(z, c, atr):
-    if len(z) < 3:
-        return []
-    a, b, d = z[-3:]
-    if (a[2], b[2], d[2]) != ("H", "L", "H"):
-        return []
-    height = min(a[1], d[1]) - b[1]
-    if height < 2 * atr or abs(a[1] - d[1]) > 0.2 * height or d[0] - a[0] < 8:
-        return []
-    return [dict(name="Double sommet", kind="retournement", need="up", start=a[0], end=d[0],
-                 level=((b[0], b[1]), (d[0], b[1])), slref=max(a[1], d[1]), height=height)]
-
-
-def d_triple_top(z, c, atr):
-    if len(z) < 5:
-        return []
-    p = z[-5:]
-    if [x[2] for x in p] != ["H", "L", "H", "L", "H"]:
-        return []
-    highs = [p[0][1], p[2][1], p[4][1]]
-    neck = min(p[1][1], p[3][1])
-    height = sum(highs) / 3 - neck
-    if height < 2 * atr or max(highs) - min(highs) > 0.2 * height \
-            or abs(p[1][1] - p[3][1]) > 0.35 * height:
-        return []
-    return [dict(name="Triple sommet", kind="retournement", need="up", start=p[0][0], end=p[4][0],
-                 level=((p[1][0], neck), (p[4][0], neck)), slref=max(highs), height=height)]
-
-
-def d_head_shoulders(z, c, atr):
-    if len(z) < 5:
-        return []
-    p = z[-5:]
-    if [x[2] for x in p] != ["H", "L", "H", "L", "H"]:
-        return []
-    ls, head, rs = p[0][1], p[2][1], p[4][1]
-    neck = ((p[1][0], p[1][1]), (p[3][0], p[3][1]))
-    height = head - at(neck, p[2][0])
-    if height < 2 * atr or head - max(ls, rs) < 0.2 * height or abs(ls - rs) > 0.4 * height \
-            or abs(p[1][1] - p[3][1]) > 0.5 * height:
-        return []
-    return [dict(name="Tête et épaules", kind="retournement", need="up", start=p[0][0], end=p[4][0],
-                 level=neck, slref=rs, height=height)]
-
-
-def d_cup_handle(z, c, atr):
-    """Version miroir (tasse inversée) ; en flip = tasse avec anse haussière."""
-    if len(z) < 4:
-        return []
-    l1, top, l2, hh = z[-4:]
-    if (l1[2], top[2], l2[2], hh[2]) != ("L", "H", "L", "H"):
-        return []
-    depth = top[1] - (l1[1] + l2[1]) / 2
-    span = l2[0] - l1[0]
-    if depth < 3 * atr or abs(l1[1] - l2[1]) > 0.2 * depth or span < 20:
-        return []
-    if hh[1] > top[1] - 0.5 * depth or hh[1] < min(l1[1], l2[1]) + 0.1 * depth \
-            or hh[0] - l2[0] > span / 2:
-        return []
-    seg = c[l1[0]:l2[0] + 1]
-    t = len(seg) // 3
-    if t < 3:
-        return []
-    mid = sum(seg[t:2 * t]) / t
-    side = (sum(seg[:t]) / t + sum(seg[-t:]) / t) / 2
-    if mid - side < 0.3 * depth:
-        return []
-    rim = min(l1[1], l2[1])
-    return [dict(name="Tasse inversée avec anse", kind="continuation", need="down", start=l1[0],
-                 end=hh[0], level=((l2[0], rim), (hh[0], rim)), slref=hh[1], height=depth)]
-
-
-def fit(z, size, atr, c, n):
-    pts = z[-size:]
-    if len(pts) < size:
-        return None
-    H = [(i, p) for i, p, t in pts if t == "H"]
-    L = [(i, p) for i, p, t in pts if t == "L"]
-    if len(H) < 2 or len(L) < 2:
-        return None
-    lh, ll = (H[0], H[-1]), (L[0], L[-1])
-    tol = TOL_ATR * atr
-    for i, p in H[1:-1]:
-        if abs(p - at(lh, i)) > tol:
-            return None
-    for i, p in L[1:-1]:
-        if abs(p - at(ll, i)) > tol:
-            return None
-    for i in range(pts[0][0], n - 1):          # le prix doit être resté dans la figure
-        if c[i] > at(lh, i) + tol or c[i] < at(ll, i) - tol:
-            return None
-    return lh, ll, pts
-
-
-def classify(lh, ll, atr, i0, i1):
-    sh, sl = slope(lh) / atr, slope(ll) / atr
-    w0, w1 = at(lh, i0) - at(ll, i0), at(lh, i1) - at(ll, i1)
-    if w0 <= 0 or w1 <= 0:
-        return None, 0
-    fh, fl = abs(sh) < FLAT, abs(sl) < FLAT
-    if fh and fl:
-        return ("Rectangle", w0) if 0.75 <= w1 / w0 <= 1.3 else (None, 0)
-    if sh * sl > 0 and abs(sh - sl) < PAR and not (fh or fl):
-        return ("Canal haussier" if sh > 0 else "Canal baissier"), w0
-    if sh < -FLAT and sl > FLAT and w1 < 0.8 * w0:
-        return "Triangle symétrique", w0
-    if fl and sh < -FLAT and w1 < 0.8 * w0:
-        return "Triangle descendant", w0
-    if sh > FLAT and sl > FLAT and sl > sh and w1 < 0.8 * w0:
-        return "Biseau montant", w0
-    if sh > FLAT and sl < -FLAT and w1 > 1.2 * w0:
-        return "Élargissement", w0
-    return None, 0
-
-
-def d_two_lines(z, c, atr, n):
-    out, seen = [], set()
-    for size in (5, 6, 7, 8):
-        f = fit(z, size, atr, c, n)
-        if not f:
-            continue
-        lh, ll, pts = f
-        name, w0 = classify(lh, ll, atr, pts[0][0], pts[-1][0])
-        if not name or name in seen or w0 < MIN_H_ATR * atr:
-            continue
-        seen.add(name)
-        out.append(dict(name=name, kind=None, need=None, start=pts[0][0], end=pts[-1][0],
-                        level=ll, slref=at(lh, n - 1), height=w0, two=True))
-    return out
-
-
-FLIP_NAMES = {
-    "Double sommet": "Double creux", "Triple sommet": "Triple creux",
-    "Tête et épaules": "Tête et épaules inversée", "Biseau montant": "Biseau descendant",
-    "Triangle descendant": "Triangle ascendant", "Drapeau baissier": "Drapeau haussier",
-    "Fanion baissier": "Fanion haussier", "Canal haussier": "Canal baissier",
-    "Canal baissier": "Canal haussier", "Tasse inversée avec anse": "Tasse avec anse",
-}
-
-
-
-
-# ----------------------------- Candidats (figures sans test de cassure) -----------------------------
-def candidates(h, l, c, flip):
-    """Figures présentes sur les bougies clôturées (h, l, c), dont le dernier pivot est récent. Chaque candidat : nom, famille
-    (retournement / continuation), s (+1 / -1 : signe du miroir), atr, ligne de cassure `level` (indices de bougies, espace miroir),
-    slref (extrême du stop), height (hauteur de la mesure). La cassure se teste ensuite en M15 (voir scan_s3)."""
-    n = len(c)
-    if n < 80:
-        return []
-    if flip:
-        h, l, c = [-x for x in l], [-x for x in h], [-x for x in c]
-    s = -1 if flip else 1
-    atr = atr_last(h, l, c)
-    if atr <= 0:
-        return []
-    z = zigzag(h, l, PIVOT_K, MIN_SWING_ATR * atr)
-    cands = (d_double_top(z, c, atr) + d_triple_top(z, c, atr) + d_head_shoulders(z, c, atr)
-             + d_cup_handle(z, c, atr) + d_two_lines(z, c, atr, n))
-    out = []
-    for d in cands:
-        if n - 1 - d["end"] > MAX_AGE:
-            continue
-        pt = pretrend(c, d["start"], atr)
-        name, kind, height = d["name"], d["kind"], d["height"]
-        if d["need"]:
-            if pt != d["need"]:
-                continue
-        else:
-            if pt == "flat":
-                continue
-            kind = "retournement" if pt == "up" else "continuation"
-            if pt == "down" and d["end"] - d["start"] <= 40 and name in (
-                    "Canal haussier", "Rectangle", "Triangle symétrique", "Biseau montant"):
-                seg = c[max(0, d["start"] - POLE_LB):d["start"] + 1]
-                pole = max(seg) - c[d["start"]]
-                if pole >= POLE_ATR * atr and d["height"] <= 0.6 * pole:
-                    name = "Drapeau baissier" if name in ("Canal haussier", "Rectangle") else "Fanion baissier"
-                    height = pole
-        out.append(dict(name=FLIP_NAMES.get(name, name) if flip else name, kind=kind, s=s, atr=atr,
-                        dir="BUY" if flip else "SELL", start=d["start"], end=d["end"], level=d["level"],
-                        slref=d["slref"], height=height))
-    return out
-
-
-def prior_leg(S, d, csc):
-    """Jambe qui précède la figure d, en espace miroir « baissier » (la figure casse vers le bas ; s = -1 retourne les prix).
-    Continuation : le prix baissait avant la figure ; retourne (origine = plus haut avant la figure, fin = plus bas jusqu'à la fin de la figure).
-    Retournement : le prix montait ; retourne (origine = plus bas avant la figure, None). None si la fenêtre est vide.
-    Fenêtre de recherche : S.S3_FIB_LB bougies avant le début de la figure."""
-    s, a, b = d["s"], max(0, d["start"] - S.S3_FIB_LB), d["start"]
-    if b >= len(csc) or a > b:
-        return None
-    hm = [x["high"] if s == 1 else -x["low"] for x in csc]
-    lm = [x["low"] if s == 1 else -x["high"] for x in csc]
-    if d["kind"] == "continuation":
-        io = max(range(a, b + 1), key=lambda i: hm[i])
-        return hm[io], min(lm[io:d["end"] + 1])
-    io = min(range(a, b + 1), key=lambda i: lm[i])
-    return lm[io], None
-
-
-def _trigger(S, d, tf, csc, m15c, m15, a_m15, funnel, dec, mode, rev_fn=lambda: None, cf_n="M15"):
-    """Confirmation (M15 ou M5, `cf_n` ; m15c / m15 / a_m15 sont les bougies et l'ATR de ce timeframe) de la cassure de la figure d (détectée sur csc, bougies clôturées de `tf`) : une des 2 dernières bougies
-    clôturées finit au-delà de la ligne, la précédente non. Retourne le signal ou None."""
-    s, dr = d["s"], d["dir"]
-    (i1, v1), (i2, v2) = d["level"]
-    t1, t2 = csc[i1]["epoch"], csc[i2]["epoch"]
-
-    def lvl(t):                                   # ligne de cassure à l'instant t (espace miroir)
-        return v1 + (v2 - v1) * (t - t1) / (t2 - t1) if t2 != t1 else v1
-
-    buf = BUF_ATR * d["atr"]
-    k = len(m15c) - 1
-    cur, ci = None, None
-    for i in range(k, max(k - S.FRESH, 0), -1):
-        c0, c1 = m15c[i], m15c[i - 1]
-        if s * c0["close"] < lvl(c0["epoch"] + S.GRAN[cf_n]) - buf and s * c1["close"] >= lvl(c1["epoch"] + S.GRAN[cf_n]) - buf:
-            cur, ci = c0, i
-            break
-    if cur is None:
-        return None
-    funnel["S3_cassure"] += 1
-    # Fibonacci, figure de continuation : le repli (la figure) ne doit pas reprendre plus de 61,8 % de la jambe qui la précède.
-    # Plus profond, ce n'est plus une pause dans la tendance mais un début de retournement : la figure est écartée.
-    fib_note, leg = None, prior_leg(S, d, csc) if (S.S3_FIB_FILTER or S.S3_FIB_CAP_TP3) else None
-    if S.S3_FIB_FILTER and d["kind"] == "continuation" and leg and leg[0] - leg[1] >= 2 * d["atr"]:
-        depth = S.fib_pullback_depth(leg[0], leg[1], d["slref"])
-        if depth is not None and depth > S.S3_FIB_CONT_MAX:
-            funnel["S3_fib"] += 1
-            return None
-        if depth is not None:
-            fib_note = f"✅ Repli de {max(depth, 0) * 100:.0f} % de la jambe précédente (Fibonacci, maximum {S.S3_FIB_CONT_MAX * 100:.1f} %)"
-    price = m15[-1]["close"]
-    ref = lvl(cur["epoch"] + S.GRAN[cf_n])
-    tps = [s * (ref - m * d["height"]) for m in TP_FRACTIONS]
-    # Fibonacci, figure de retournement : la mesure de la figure ne doit pas dépasser l'origine de la jambe précédente (100 %) ; un
-    # retournement reprend rarement plus que la jambe entière lors du premier mouvement. TP3 est plafonné à cette origine tant qu'elle reste
-    # au-delà de TP2 ; sinon on n'y touche (le ratio minimal écarte alors les cas où l'objectif est trop proche).
-    if S.S3_FIB_CAP_TP3 and d["kind"] == "retournement" and leg and leg[0] is not None:
-        tp2_m, tp3_m = ref - TP_FRACTIONS[1] * d["height"], ref - TP_FRACTIONS[2] * d["height"]
-        if tp3_m < leg[0] < tp2_m:
-            tps[2] = s * leg[0]
-            fib_note = "ℹ️ TP3 plafonné à l'origine de la jambe précédente (100 % Fibonacci)"
-    # Entrée sur le bloc d'ordre (bord proche) ou, à défaut, le milieu du FVG du déplacement qui a cassé la ligne ; stop à l'autre bout de la
-    # zone. Le déplacement part de l'extrême des S3_OB_WINDOW dernières bougies avant la cassure. Sans bloc d'ordre ni FVG : pas de signal.
-    poi, w0 = None, max(0, ci - S3_OB_WINDOW)
-    if ci > w0:
-        lo_i = (min if dr == "BUY" else max)(range(w0, ci), key=lambda j: m15c[j]["low"] if dr == "BUY" else m15c[j]["high"])
-        poi = S.entry_zone(m15c[:ci + 2], lo_i, ci - 1, dr)
-    if poi is None:
-        funnel["S3_zone"] += 1
-        return None                                # aucun bloc d'ordre ni FVG sur le déplacement de cassure
-    zlo, zhi = poi[2]
-    sl = zlo - S.BUF_ATR * a_m15 if dr == "BUY" else zhi + S.BUF_ATR * a_m15
-    zname = "bloc d'ordre" if poi[1] == "OB" else "FVG"
-    otype, entry = S.pick_entry(dr, price, poi[0], sl, mode)
-    if otype != dr:
-        if abs(price - entry) > S.S3_LIMIT_MAX_ATR * a_m15:
-            funnel["S3_stale"] += 1
-            return None                            # zone d'entrée trop loin du prix
-    elif S.is_late(dr, price, cur["close"], a_m15, S.S3_CHASE_ATR):
-        funnel["S3_stale"] += 1
-        return None                                # le prix a déjà fui après la cassure
-    # Confluence avec l'alerte de retournement (sweep sur niveau majeur + cassure de structure H1 contre une tendance H4 mûre) :
-    # une figure de retournement qui la rejoint a un risque admis plus large ; sans elle, un ratio plus exigeant.
-    conf, min_rr, cap = None, S3_MIN_RR, S3_RISK_CAP_ATR
-    if d["kind"] == "retournement":
-        rev = rev_fn()
-        conf = bool(rev and rev["dir"] == dr)
-        if conf:
-            cap = S3_RISK_CAP_ATR * S3_CONF_RISK_FACTOR
-        else:
-            min_rr = S3_NOCONF_MIN_RR
-    lv = S.build_levels(dr, entry, sl, a_m15, tps=tps)
-    if lv is None:
-        return None
-    if cap and lv["risk"] > cap * d["atr"]:
-        funnel["S3_risque"] += 1
-        return None                                # stop trop large pour la volatilité de la figure
-    gain = lambda t: ((t - entry) if dr == "BUY" else (entry - t)) / lv["risk"]
-    if gain(tps[0]) <= 0:
-        return None                                # TP1 déjà dépassé : le mouvement a eu lieu
-    if min_rr and gain(tps[2]) < min_rr:
-        funnel["S3_rr"] += 1
-        return None                                # ratio gain/risque vers TP3 sous le minimum
-    funnel["S3_signal"] += 1
-    fam = d["kind"]
-    return S._signal(
-        "S3", "Figures & Retournement", dr, entry, lv, m15, cf_n, f"{d['name']}|{tf}|{cur['epoch']}",
-        [f"✅ Figure {tf} : {d['name']} ({fam})",
-         f"✅ Cassure confirmée en {cf_n} ({'sous' if dr == 'SELL' else 'au-dessus de'} la ligne)",
-         f"✅ Entrée sur le {zname} {cf_n} du déplacement qui a cassé la ligne ({zlo:.{dec}f} - {zhi:.{dec}f}), stop à l'autre bout de la zone",
-         f"✅ Objectif = hauteur de la figure ({d['height']:.{dec}f})"]
-        + (["✅ Confluence : retournement possible (sweep sur niveau majeur + cassure de structure H1)"] if conf else [])
-        + ([f"ℹ️ Pas de confluence de retournement : ratio minimal {S3_NOCONF_MIN_RR:g} exigé"] if conf is False else [])
-        + ([fib_note] if fib_note else []),
-        lines=[{"y": s * ref, "label": f"{d['name']} · cassure", "kind": "info"}],
-        inval=sl, short=f"{d['name']} {tf} · {fam}", trig=cur["epoch"], otype=otype, price_now=price,
-        ttl=S3_LIMIT_TTL if otype != dr else None,
-        entry_note=S.poi_note(poi, cf_n, dec) if otype != dr else "",
-        extra=dict({"origine": "figure", "figure": d["name"], "famille": fam, "tf_figure": tf, "poi": poi[1] if otype != dr else "marché"},
-                   **({"confluence_retournement": conf} if conf is not None else {}), **{"min_rr": min_rr}))
-
-
-def _s3_gate(S, sig, provide, now, funnel, kz):
-    """Garde-fous communs aux figures et au retournement, appliqués au signal construit : session, âge du déclencheur, contexte H4/D1
-    (continuation), obstacles H4/H1 (intraday). Retourne False (et compte le refus) si le signal est écarté."""
-    if kz and S.S3_SESSIONS and sig.get("trig_close") and S.session_name(sig["trig_close"] - 1) not in S.S3_SESSIONS:
-        funnel["S3_session"] += 1                   # déclencheur hors des sessions de Londres / New York (marchés à séance seulement)
-        return False
-    if S.S3_MAX_AGE_MIN and sig.get("trig_close") and (now - sig["trig_close"]) / 60 > S.S3_MAX_AGE_MIN:
-        funnel["S3_age"] += 1                       # déclencheur trop ancien (retard du cron ou du workflow)
-        return False
-    extra = sig.get("extra") or {}
-    if S.S3_CONTEXT_ALIGN and extra.get("famille") == "continuation":
-        for tf in ("H4", "D1"):                     # une continuation ne va pas contre une tendance H4 ou D1 claire
-            cs = provide(tf)
-            info = trend_info(cs, tf) if cs and len(cs) >= 10 else None
-            if info is not None and info["dir"] != sig["dir"]:
-                funnel["S3_contexte"] += 1
-                return False
-    if S.INTRADAY:
-        tfs = None                                                  # retournement : obstacles H4 et H1
-        if extra.get("origine") == "figure":
-            min_rr, on = extra.get("min_rr", S3_MIN_RR), "tp3"      # objectifs = fractions de la hauteur : ratio vers TP3
-            tfs = S.S3_FIGURE_OBST_TFS                              # figures : obstacles H4 seulement
-        else:
-            min_rr, on = S3_REV_MIN_RR, "tp1"              # TP1 = première liquidité : même ratio que S1 et S2
-        why = S.obstacle_filter(sig, provide, now, "S3", False, min_rr, on, tfs)
-        if why:
-            funnel[why] += 1                        # obstacle H4/H1 trop proche devant l'objectif
-            return False
-    return True
-
-
-def scan_s3(provide, now, funnel, dec=2, kz=True, mode="market"):
-    """S3 Figures & Retournement : figures H1 / H4 (cassure confirmée en M15) et retournement possible. Retourne une liste de signaux (au plus un par sens), ou None.
-    `kz` : les sessions ne s'appliquent qu'aux marchés à séance (False pour les marchés 24h/24)."""
-    import strategies as S
-    cf_n = S.confirm_tf("S3")                       # confirmation de la cassure : M15 (défaut) ou M5
-    m15 = provide(cf_n)
-    if not m15:
-        return None
-    m15c = m15[:-1]
-    if len(m15c) < 20:
-        return None
-    a_m15 = S.unit(m15c)
-    if a_m15 <= 0:
-        return None
-    memo = {}
-
-    def rev_fn():                                   # alerte de retournement, calculée une seule fois par scan, et seulement si utile
-        if "rev" not in memo:
-            memo["rev"] = detect(provide, now)
-        return memo["rev"]
-
-    best = {}
-    for tf in S3_TFS:
-        cs = provide(tf)
-        csc = (cs[:-1] if cs else [])[-300:]
-        if len(csc) < 80:
-            continue
-        h = [x["high"] for x in csc]
-        l = [x["low"] for x in csc]
-        c = [x["close"] for x in csc]
-        for flip in (False, True):
-            for d in candidates(h, l, c, flip):
-                funnel["S3_figure"] += 1
-                sig = _trigger(S, d, tf, csc, m15c, m15, a_m15, funnel, dec, mode, rev_fn, cf_n)
-                if not sig or not _s3_gate(S, sig, provide, now, funnel, kz):
-                    continue
-                sig["rr_tp3"] = S.s5_rr(sig, "tp3")                    # TP3 peut manquer (objectifs ramenés avant un obstacle) : dernier objectif restant
-                if sig["dir"] not in best or sig["rr_tp3"] > best[sig["dir"]]["rr_tp3"]:
-                    best[sig["dir"]] = sig
-    for sig in best.values():
-        sig.pop("rr_tp3", None)
-    out = list(best.values())
-    # Partie « retournement » : le même événement (sweep d'un niveau majeur + cassure de structure H1) en ordre. Si une figure de
-    # retournement a déjà donné un signal dans ce sens, c'est elle qui le porte (avec sa confluence) : un seul signal par sens.
-    rev = rev_fn()
-    if rev and rev["dir"] not in best:
-        sig = reversal_signal(provide, now, funnel, dec, mode, rev=rev)
-        if sig and _s3_gate(S, sig, provide, now, funnel, kz):
-            out.append(sig)
-    return out or None
-
-# ==========================================================================
-# CRT (S4)
+# CRT (S3)
 # ==========================================================================
 
 def crt_pair(S, rc, funnel=None):
@@ -991,7 +430,7 @@ def _crt_one(S, tf, ref, m15, m15c, a_m15, a_h1, funnel, dec, kz, mode, cf_n="M1
     price = m15[-1]["close"]
     sl = ext_px + S.CRT_SL_BUF_ATR * a_m15 if d == "SELL" else ext_px - S.CRT_SL_BUF_ATR * a_m15
     poi = S.entry_zone(m15c, ext_i, trig - 1, d)
-    if S.S4_STOP_MODE == "ob" and poi:
+    if S.S3_STOP_MODE == "ob" and poi:
         sl = S.zone_stop(d, poi[2], a_m15)               # stop à l'autre extrémité du bloc d'ordre (ou du FVG) d'entrée
     otype, entry = S.pick_entry(d, price, poi[0] if poi else None, sl, mode)
     if otype != d:
@@ -1021,7 +460,7 @@ def _crt_one(S, tf, ref, m15, m15c, a_m15, a_h1, funnel, dec, kz, mode, cf_n="M1
                f"✅ CHoCH {cf_n} {'sous' if side_hi else 'au-dessus de'} {pivot:.{dec}f} après la clôture de C2"]
     details.append(f"🎯 Objectifs sur C1 : milieu {tp1:.{dec}f}, bord opposé {tp2:.{dec}f}, bord opposé + {S.CRT_TP3_EXT * 100:.0f} % du range {tp3:.{dec}f}")
     return S._signal(
-        "S4", "CRT", d, entry, lv, m15, cf_n, f"{tf}|{c2['epoch']}", details,
+        "S3", "CRT", d, entry, lv, m15, cf_n, f"{tf}|{c2['epoch']}", details,
         lines=[{"y": hi1, "label": f"C1 haut {tf}", "kind": "range"}, {"y": lo1, "label": f"C1 bas {tf}", "kind": "range"},
                {"y": mid, "label": "Milieu C1", "kind": "info"}, {"y": ext_px, "label": "Sweep C2", "kind": "sweep"},
                {"y": pivot, "label": "CHoCH", "kind": "info"}],
@@ -1030,14 +469,14 @@ def _crt_one(S, tf, ref, m15, m15c, a_m15, a_h1, funnel, dec, kz, mode, cf_n="M1
         extra=dict({"ref": tf, "c1": f"{lo1:.{dec}f}-{hi1:.{dec}f}", "poi": poi[1] if otype != d else "marché", "tp": "range C1"},
                    **_crt_c2_h4(S, tf, c2)),
         short=f"CRT {tf} · C2 clôturée dans C1 · CHoCH {cf_n}", trig=tc["epoch"], otype=otype, price_now=price,
-        ttl=S.LIMIT_TTL["S4"] if otype != d else None,
+        ttl=S.LIMIT_TTL["S3"] if otype != d else None,
         entry_note=S.poi_note(poi, cf_n, dec) if otype != d else "")
 
 
 def scan_crt(provide, now, funnel, dec=2, kz=True, mode="market"):
-    """S4 CRT : une liste de signaux (au plus un par bougie de référence : H4 et H1), vide s'il n'y a rien."""
+    """S3 CRT : une liste de signaux (au plus un par bougie de référence : H4 et H1), vide s'il n'y a rien."""
     import strategies as S
-    cf_n = S.confirm_tf("S4")                         # confirmation : M15 (défaut) ou M5 (m15 / m15c / a_m15 : bougies et ATR de ce timeframe)
+    cf_n = S.confirm_tf("S3")                         # confirmation : M15 (défaut) ou M5 (m15 / m15c / a_m15 : bougies et ATR de ce timeframe)
     m15, h1 = provide(cf_n), provide("H1")
     if not (m15 and h1):
         return []
@@ -1079,7 +518,7 @@ def _crt_gate(S, sig, provide, now, funnel):
 
 
 # ==========================================================================
-# S9 Market Profiles (profiles.py : range -> manipulation -> expansion, prix pur)
+# S4 Market Profiles (profiles.py : range -> manipulation -> expansion, prix pur)
 # ==========================================================================
 def _profile_key_levels(S, provide, now, a_h1):
     """Niveaux clés (prix) : PDH/PDL, extrêmes de la plage asiatique, equal highs/lows H1 (liquidity_levels) et derniers sommets/creux H4.
@@ -1091,7 +530,7 @@ def _profile_key_levels(S, provide, now, a_h1):
     if h4 and len(h4) > 12:
         h4c = h4[:-1]
         for kind in ("high", "low"):
-            out += [h4c[i][kind] for i in S.swings(h4c, kind, 2)[-S.S9_H4_SWINGS:]]
+            out += [h4c[i][kind] for i in S.swings(h4c, kind, 2)[-S.S4_H4_SWINGS:]]
     uniq = []
     for px in sorted(out):
         if not uniq or px - uniq[-1] > 0.1 * a_h1:
@@ -1100,11 +539,11 @@ def _profile_key_levels(S, provide, now, a_h1):
 
 
 def _profile_tps(S, P, closed, d, entry, risk, tp1):
-    """TP2 / TP3 : liquidité opposée suivante (pivot) à plus de 0,5 R de l'objectif précédent et à moins de S9_TP_MAX_R au-delà de TP1,
+    """TP2 / TP3 : liquidité opposée suivante (pivot) à plus de 0,5 R de l'objectif précédent et à moins de S4_TP_MAX_R au-delà de TP1,
     sinon l'objectif précédent + 1 R. TP1 vient de profiles.py (première liquidité opposée, sinon le ratio minimal)."""
     sgn = 1 if d == "BUY" else -1
     typ = "H" if d == "BUY" else "L"
-    liq = sorted((p for _, t, p in P.pivots(closed) if t == typ and 0 < sgn * (p - tp1) <= S.S9_TP_MAX_R * risk), key=lambda p: sgn * p)
+    liq = sorted((p for _, t, p in P.pivots(closed) if t == typ and 0 < sgn * (p - tp1) <= S.S4_TP_MAX_R * risk), key=lambda p: sgn * p)
     tps, prev = [], tp1
     for _ in range(2):
         nxt = next((p for p in liq if sgn * (p - prev) > 0.5 * risk), None)
@@ -1120,29 +559,29 @@ def _profile_one(S, P, st, closed, cs, tf, a_ltf, a_h1, funnel, dec, kz, mode):
         return None
     tc = closed[st.trig]
     sess = S.session_name(tc["epoch"])
-    if kz and S.S9_SESSION_FILTER and sess not in S.S9_SESSIONS:
-        funnel["S9_session"] += 1
+    if kz and S.S4_SESSION_FILTER and sess not in S.S4_SESSIONS:
+        funnel["S4_session"] += 1
         return None                                      # marchés à séance : déclencheur hors Londres / New York / London Close
     price = cs[-1]["close"]
     retest_done = abs(price - st.entry) < 0.1 * a_ltf    # setup B après retest : l'entrée est le prix actuel
     if not retest_done and sgn * (price - st.entry) < 0:
-        funnel["S9_stale"] += 1
+        funnel["S4_stale"] += 1
         return None                                      # le prix est repassé du mauvais côté du niveau de retest
-    sl = st.sl - sgn * S.S9_SL_BUF_ATR * a_ltf
+    sl = st.sl - sgn * S.S4_SL_BUF_ATR * a_ltf
     otype, entry = S.pick_entry(d, price, None if retest_done else st.entry, sl, mode)
     if otype != d:
-        if abs(price - entry) > S.S9_LIMIT_MAX_ATR * a_ltf:
-            funnel["S9_stale"] += 1
+        if abs(price - entry) > S.S4_LIMIT_MAX_ATR * a_ltf:
+            funnel["S4_stale"] += 1
             return None                                  # niveau de retest trop loin du prix
-    elif S.is_late(d, price, tc["close"], a_ltf, S.S9_CHASE_ATR):
-        funnel["S9_stale"] += 1
+    elif S.is_late(d, price, tc["close"], a_ltf, S.S4_CHASE_ATR):
+        funnel["S4_stale"] += 1
         return None                                      # le prix a déjà fui après le déclencheur
     risk0 = abs(entry - sl)
     tp1 = st.tp1
     if risk0 <= 0 or sgn * (tp1 - entry) <= 0:
         funnel["stale"] += 1
         return None                                      # objectif déjà atteint
-    min_rr = S.S9_MIN_RR or 3.0
+    min_rr = S.S4_MIN_RR or 3.0
     liq = abs(tp1 - (st.entry + sgn * min_rr * abs(st.entry - st.sl))) > 1e-9 * max(1.0, abs(tp1))   # TP1 = vraie liquidité (sinon : ratio minimal)
     lv = S.build_levels(d, entry, sl, a_ltf, tps=[tp1, tp1, tp1])
     if lv is None:
@@ -1151,11 +590,11 @@ def _profile_one(S, P, st, closed, cs, tf, a_ltf, a_h1, funnel, dec, kz, mode):
         tp1 = entry + sgn * min_rr * lv["risk"]          # sans liquidité : TP1 au ratio minimal du risque réel (marge du stop comprise)
     tp2, tp3 = _profile_tps(S, P, closed, d, entry, lv["risk"], tp1)
     lv["tp"] = [tp1, tp2, tp3]
-    if S.S9_MIN_RR and abs(tp1 - entry) / lv["risk"] < S.S9_MIN_RR - 1e-9:
-        funnel["S9_rr"] += 1
+    if S.S4_MIN_RR and abs(tp1 - entry) / lv["risk"] < S.S4_MIN_RR - 1e-9:
+        funnel["S4_rr"] += 1
         return None                                      # ratio gain/risque sous le minimum après la marge du stop
-    if S.S9_RISK_CAP_H1 and lv["risk"] > S.S9_RISK_CAP_H1 * a_h1:
-        funnel["S9_risque"] += 1
+    if S.S4_RISK_CAP_H1 and lv["risk"] > S.S4_RISK_CAP_H1 * a_h1:
+        funnel["S4_risque"] += 1
         return None                                      # stop trop large
     letter, m = st.name.split()[0], st.meta
     is_b = letter == "B"
@@ -1169,7 +608,7 @@ def _profile_one(S, P, st, closed, cs, tf, a_ltf, a_h1, funnel, dec, kz, mode):
     if m.get("level") is not None:
         details.append(f"✅ Cassure du niveau {m['level']:.{dec}f}, retest attendu" if is_b else
                        f"✅ CHoCH : clôture {'au-dessus' if d == 'BUY' else 'sous'} {m['level']:.{dec}f}")
-    details.append("🎯 TP1 sur la prochaine liquidité opposée" if liq else f"🎯 TP1 au ratio minimal ({S.S9_MIN_RR or 3.0:g} R) : aucune liquidité opposée repérée")
+    details.append("🎯 TP1 sur la prochaine liquidité opposée" if liq else f"🎯 TP1 au ratio minimal ({S.S4_MIN_RR or 3.0:g} R) : aucune liquidité opposée repérée")
     lines = []
     if m.get("range"):
         lines += [{"y": m["range"][1], "label": "Range haut", "kind": "range"}, {"y": m["range"][0], "label": "Range bas", "kind": "range"}]
@@ -1181,39 +620,39 @@ def _profile_one(S, P, st, closed, cs, tf, a_ltf, a_h1, funnel, dec, kz, mode):
         lines.append({"y": m["level"], "label": "Retest" if is_b else "CHoCH", "kind": "info"})
     zones = [{"lo": m["range"][0], "hi": m["range"][1], "label": "Range", "kind": "fib"}] if m.get("range") else []
     return S._signal(
-        "S9", "Market Profiles", d, entry, lv, cs, tf, f"{letter}|{tc['epoch']}", details,
+        "S4", "Market Profiles", d, entry, lv, cs, tf, f"{letter}|{tc['epoch']}", details,
         lines=lines, zones=zones, inval=st.sl, session=sess,
         extra={"setup": st.name, "poi": "niveau" if otype != d else "marché", "tp": "liquidité" if liq else "ratio"},
         short=f"{st.name} · {tf}", trig=tc["epoch"], otype=otype, price_now=price,
-        ttl=S.LIMIT_TTL["S9"] if otype != d else None,
+        ttl=S.LIMIT_TTL["S4"] if otype != d else None,
         entry_note=f"Ordre limite au retest de {entry:.{dec}f} ({st.note})" if otype != d else "")
 
 
 def _profile_gate(S, sig, provide, now, funnel):
     """Garde-fous appliqués au signal construit : âge du déclencheur, obstacles H4/H1 (intraday)."""
-    if S.S9_MAX_AGE_MIN and sig.get("trig_close") and (now - sig["trig_close"]) / 60 > S.S9_MAX_AGE_MIN:
-        funnel["S9_age"] += 1                            # déclencheur trop ancien (retard du cron ou du workflow)
+    if S.S4_MAX_AGE_MIN and sig.get("trig_close") and (now - sig["trig_close"]) / 60 > S.S4_MAX_AGE_MIN:
+        funnel["S4_age"] += 1                            # déclencheur trop ancien (retard du cron ou du workflow)
         return False
     if S.INTRADAY:
-        why = S.obstacle_filter(sig, provide, now, "S9", False, S.S9_MIN_RR, "tp1")
+        why = S.obstacle_filter(sig, provide, now, "S4", False, S.S4_MIN_RR, "tp1")
         if why:
             funnel[why] += 1                             # obstacle H4/H1 trop proche devant l'objectif
             return False
-    funnel["S9_signal"] += 1
+    funnel["S4_signal"] += 1
     return True
 
 
 def scan_profiles(provide, now, funnel, dec=2, kz=True, mode="market"):
-    """S9 Market Profiles : une liste de signaux (au plus un par setup A à E), vide s'il n'y a rien.
+    """S4 Market Profiles : une liste de signaux (au plus un par setup A à E), vide s'il n'y a rien.
     Les 5 setups de profiles.py (range + sweep, break & retest, reversal sur niveau clé, manipulation sur support, retracement + deep
-    sweep) sont évalués sur les bougies clôturées du timeframe S9_TF ; les niveaux clés viennent du bot (veille, plage asiatique, EQH/EQL, H4)."""
+    sweep) sont évalués sur les bougies clôturées du timeframe S4_TF ; les niveaux clés viennent du bot (veille, plage asiatique, EQH/EQL, H4)."""
     import profiles as P
     import strategies as S
-    tf = S.S9_TF
+    tf = S.S4_TF
     cs, h1 = provide(tf), provide("H1")
     if not (cs and h1):
         return []
-    closed, h1c = cs[:-1][-S.S9_BARS:], h1[:-1]
+    closed, h1c = cs[:-1][-S.S4_BARS:], h1[:-1]
     if len(closed) < 40 or len(h1c) < 40:
         return []
     a_ltf, a_h1 = S.unit(closed), S.unit(h1c)
@@ -1221,8 +660,8 @@ def scan_profiles(provide, now, funnel, dec=2, kz=True, mode="market"):
         return []
     levels = _profile_key_levels(S, provide, now, a_h1)
     out = []
-    for st in P.scan_all(closed, levels, min_rr=S.S9_MIN_RR or 3.0):
-        funnel["S9_setup"] += 1
+    for st in P.scan_all(closed, levels, min_rr=S.S4_MIN_RR or 3.0):
+        funnel["S4_setup"] += 1
         sig = _profile_one(S, P, st, closed, cs, tf, a_ltf, a_h1, funnel, dec, kz, mode)
         if sig and _profile_gate(S, sig, provide, now, funnel):
             out.append(sig)

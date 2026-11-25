@@ -14,7 +14,7 @@ Outils de validation (pour ne pas se fier à un seul chiffre) :
 
 Exemples :
   python backtest.py --days 120 --split 0.6
-  python backtest.py --days 180 --only S2,S3
+  python backtest.py --days 180 --only S2,S3   # S3 = CRT
   python backtest.py --days 120 --set strategies.S5_IMPULSE_ATR=1.5,2,2.5 --set tracker.STRUCT_EXIT=true,false
   python backtest.py --source csv --file xauusd_m5.csv
   python backtest.py --source sim --days 60          (marche aléatoire : contrôle de bon sens)
@@ -402,7 +402,7 @@ def main():
     ap.add_argument("--source", choices=["deriv", "csv", "sim"], default="deriv")
     ap.add_argument("--file", help="CSV M5 de l'or (source csv)")
     ap.add_argument("--days", type=float, default=120)
-    ap.add_argument("--only", help="stratégies à rejouer, ex. S2,S3 (défaut : toutes)")
+    ap.add_argument("--only", help="stratégies à rejouer, ex. S2,S3 (S3 = CRT ; défaut : toutes)")
     ap.add_argument("--spread-pct", type=float, default=None,
                     help="spread en %% du prix (défaut : 0,015)")
     ap.add_argument("--warmup-days", type=float, default=35)

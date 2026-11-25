@@ -6,8 +6,8 @@ backtest), pas la rentabilité des stratégies.
 """
 import glob, os, re
 os.environ.setdefault("INTRADAY", "0")
-for _k, _v in (("S3_MIN_RR", "0"), ("S3_MAX_AGE_MIN", "0"), ("S3_CONTEXT_ALIGN", "0")):
-    os.environ.setdefault(_k, _v)             # garde-fous de CRT (variables S3_*) neutralisés dans les scénarios historiques ; les tests historiques décrivent l'ancien comportement ; le cadre intraday a ses propres tests
+for _k, _v in (("S3_MIN_RR", "0"), ("S3_MAX_AGE_MIN", "0"), ("S3_CONTEXT_ALIGN", "0"), ("S1_CONFIRM_TF", "M15"), ("S3_CONFIRM_TF", "M15")):
+    os.environ.setdefault(_k, _v)             # garde-fous de CRT (variables S3_*) neutralisés et entrées en M15 (S1_CONFIRM_TF, S3_CONFIRM_TF) dans les scénarios historiques ; les tests historiques décrivent l'ancien comportement ; le cadre intraday a ses propres tests
 import random
 import unittest
 from unittest import mock
@@ -1365,8 +1365,9 @@ class TestCadreIntraday(unittest.TestCase):
         self.assertIsNone(S.htf_obstacles(lambda tf: None, 0))
 
     def test_cascade_s5_unique_en_intraday(self):
-        self.assertEqual(S.S5_CASCADES_INTRADAY, [("H4", "H1", "M15")])
+        self.assertEqual(S.S5_CASCADES_INTRADAY, [("H4", "H1", "M5")])            # cascade unique, avec S1_MULTI_CASCADE=0
         self.assertIn(S.S5_CASCADES_INTRADAY[0], S.S5_CASCADES)
+        self.assertTrue(S.S5_MULTI_CASCADE)                                       # par défaut : les trois cascades
 
 
 class TestCoherenceEntreStrategies(unittest.TestCase):
@@ -2046,20 +2047,18 @@ class ConfirmationM5(unittest.TestCase):
     def test_choix_par_defaut(self):
         from unittest import mock
         with mock.patch.multiple(S, **ALL_TF_OFF):
-            with mock.patch.object(S, "INTRADAY", True):
-                self.assertEqual([S.confirm_tf(c) for c in ("S1", "S2", "S3")], ["M15"] * 3)
-            with mock.patch.object(S, "INTRADAY", False):
-                self.assertEqual(S.confirm_tf("S2"), "M5")                       # comportement historique : S2 suit INTRADAY
-                self.assertEqual([S.confirm_tf(c) for c in ("S1", "S3")], ["M15"] * 2)
+            for intraday in (True, False):
+                with mock.patch.object(S, "INTRADAY", intraday):
+                    self.assertEqual([S.confirm_tf(c) for c in ("S2", "S3")], ["M5"] * 2)   # défaut : M5 dans le cadre H4/H1, avec ou sans cadre intraday
 
     def test_choix_explicite_et_valeur_invalide(self):
         from unittest import mock
-        with mock.patch.multiple(S, **{**ALL_TF_OFF, "S2_CONFIRM_TF": "M15", "S3_CONFIRM_TF": "M5"}):
-            with mock.patch.object(S, "INTRADAY", False):
-                self.assertEqual(S.confirm_tf("S2"), "M15")                      # forcé en M15 même hors cadre intraday
-                self.assertEqual(S.confirm_tf("S3"), "M5")                       # CRT lit S3_CONFIRM_TF
+        with mock.patch.multiple(S, **{**ALL_TF_OFF, "S2_CONFIRM_TF": "M15", "S3_CONFIRM_TF": "M15"}):
+            for intraday in (True, False):
+                with mock.patch.object(S, "INTRADAY", intraday):
+                    self.assertEqual([S.confirm_tf(c) for c in ("S2", "S3")], ["M15"] * 2)   # M15 forcé : ancien comportement (CRT lit S3_CONFIRM_TF)
         with mock.patch.multiple(S, **{**ALL_TF_OFF, "S3_CONFIRM_TF": "H1"}):
-            self.assertEqual(S.confirm_tf("S3"), "M15")                          # valeur inconnue : comportement par défaut
+            self.assertEqual(S.confirm_tf("S3"), "M5")                           # valeur inconnue : comportement par défaut
 
     def test_lecture_de_la_variable_d_environnement(self):
         from unittest import mock
@@ -2077,16 +2076,23 @@ class ConfirmationM5(unittest.TestCase):
 
     def test_cascades_s1(self):
         from unittest import mock
+        trois = [("D1", "H4", "H1"), ("H4", "H1", "M5"), ("H1", "M15", "M5")]
         with mock.patch.multiple(S, S1_CONFIRM_TF=""):
-            with mock.patch.object(S, "INTRADAY", True):
-                self.assertEqual(S.s1_cascades(), [("H4", "H1", "M15")])
-            with mock.patch.object(S, "INTRADAY", False):
-                self.assertEqual(S.s1_cascades(), S.S5_CASCADES)
+            for intraday in (True, False):
+                with mock.patch.object(S, "INTRADAY", intraday):
+                    self.assertEqual(S.s1_cascades(), trois)                      # par défaut : les trois cascades, la dernière entre en M5
+            with mock.patch.object(S, "INTRADAY", True), mock.patch.object(S, "S5_MULTI_CASCADE", False):
+                self.assertEqual(S.s1_cascades(), [("H4", "H1", "M5")])           # S1_MULTI_CASCADE=0 : cascade unique du cadre intraday
+            with mock.patch.object(S, "INTRADAY", False), mock.patch.object(S, "S5_MULTI_CASCADE", False):
+                self.assertEqual(S.s1_cascades(), trois)                          # sans cadre intraday : toujours trois cascades
         with mock.patch.multiple(S, S1_CONFIRM_TF="M5"):
-            with mock.patch.object(S, "INTRADAY", True):
-                self.assertEqual(S.s1_cascades(), [("H4", "H1", "M5")])          # même cadre, entrée en M5
-            with mock.patch.object(S, "INTRADAY", False):
-                self.assertEqual(S.s1_cascades(), [("D1", "H4", "M5"), ("H4", "H1", "M5"), ("H1", "M15", "M5")])
+            self.assertEqual(S.s1_cascades(), [("D1", "H4", "M5"), ("H4", "H1", "M5"), ("H1", "M15", "M5")])   # toutes entrent en M5
+            with mock.patch.object(S, "INTRADAY", True), mock.patch.object(S, "S5_MULTI_CASCADE", False):
+                self.assertEqual(S.s1_cascades(), [("H4", "H1", "M5")])           # cascade unique, entrée en M5
+        with mock.patch.multiple(S, S1_CONFIRM_TF="M15"):
+            self.assertEqual(S.s1_cascades(), [("D1", "H4", "H1"), ("H4", "H1", "M15"), ("H1", "M15", "M5")])   # M15 : ancien défaut de H4>H1
+            with mock.patch.object(S, "INTRADAY", True), mock.patch.object(S, "S5_MULTI_CASCADE", False):
+                self.assertEqual(S.s1_cascades(), [("H4", "H1", "M15")])          # cascade unique du cadre intraday, entrée M15
 
     def test_s2_en_m5_dans_le_cadre_intraday(self):
         off = dict(S2_BIAS_FILTER=False, S2_HTF_ZONE=False, S2_LIQ_TARGETS=False)

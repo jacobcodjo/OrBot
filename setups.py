@@ -35,7 +35,7 @@ Le raisonnement est écrit pour une tendance haussière ; une tendance baissièr
 
 == CRT (S3) ==
 S3 CRT (Candle Range Theory) pur : le range d'une bougie de référence (C1) est balayé par la bougie suivante (C2), qui clôture à
-l'intérieur de ce range ; on entre en M15 (ou M5, variable S3_CONFIRM_TF) sur la cassure de structure qui suit la clôture de C2, vers le milieu puis le bord opposé de C1.
+l'intérieur de ce range ; on entre en M5 (ou M15, variable S3_CONFIRM_TF=M15) sur la cassure de structure qui suit la clôture de C2, vers le milieu puis le bord opposé de C1.
 
   C1  bougie de référence D1 (range daily) ou H4 (la dernière clôturée avant C2) : son range est la jambe de livraison.
   C2  bougie clôturée qui dépasse le plus haut (vente) ou le plus bas (achat) de C1 et clôture DANS le range de C1.
@@ -476,7 +476,7 @@ def _crt_one(S, tf, ref, m15, m15c, a_m15, a_h1, funnel, dec, kz, mode, cf_n="M1
 def scan_crt(provide, now, funnel, dec=2, kz=True, mode="market"):
     """S3 CRT : une liste de signaux (au plus un par bougie de référence : H4 et H1), vide s'il n'y a rien."""
     import strategies as S
-    cf_n = S.confirm_tf("S3")                         # confirmation : M15 (défaut) ou M5 (m15 / m15c / a_m15 : bougies et ATR de ce timeframe)
+    cf_n = S.confirm_tf("S3")                         # confirmation : M5 (défaut) ou M15 (m15 / m15c / a_m15 : bougies et ATR de ce timeframe)
     m15, h1 = provide(cf_n), provide("H1")
     if not (m15 and h1):
         return []

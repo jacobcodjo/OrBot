@@ -37,7 +37,7 @@ S2_SESSIONS = ()                       # killzones facultatives (ex. ("Londres",
 S2_PIVOT_BARS = 36                     # pivot M5 à moins de 36 bougies M5 (3 h) du sommet/creux du sweep
 
 # --- S1 Pullback (impulsion + retracement Fibonacci) ---
-S5_CASCADES = [("D1", "H4", "H1"), ("H4", "H1", "M15"), ("H1", "M15", "M5")]   # (tendance, impulsion + Fibonacci, entrée)
+S5_CASCADES = [("D1", "H4", "H1"), ("H4", "H1", "M5"), ("H1", "M15", "M5")]    # (tendance, impulsion + Fibonacci, entrée) ; H4>H1 entre en M5 par défaut (S1_CONFIRM_TF=M15 : M15)
 
 
 # ======================================================================================================================
@@ -141,10 +141,11 @@ def _flag(name, default=True):
     return default if v == "" else v not in ("0", "false", "non", "off", "no")
 
 
-# Cadre intraday (INTRADAY=0 pour le désactiver) : contexte et obstacles en H4 / H1, confirmation en M15,
+# Cadre intraday (INTRADAY=0 pour le désactiver) : contexte et obstacles en H4 / H1, entrée en M5,
 # clôture de fin de séance (voir tracker.py).
 INTRADAY = _flag("INTRADAY", True)
-S5_CASCADES_INTRADAY = [("H4", "H1", "M15")]
+S5_CASCADES_INTRADAY = [("H4", "H1", "M5")]             # cascade unique du cadre intraday, utilisée seulement avec S1_MULTI_CASCADE=0
+S5_MULTI_CASCADE = _flag("S1_MULTI_CASCADE", True)     # S1 scanne les trois cascades (D1>H4>H1, H4>H1>M5, H1>M15>M5) ; 0 : une seule (H4>H1>M5) avec le cadre intraday
 S2_PIVOT_BARS_M15 = 12                  # confirmation M15 : pivot à moins de 12 bougies M15 (3 h) du sommet/creux du sweep
 S5_ZONE = (0.5, 0.79)                  # zone de retracement acceptée : 50 % -> 79 % de la jambe
 S5_OTE_FROM = 0.618                    # entre 50 % et 61,8 % : « Golden Zone » ; entre 61,8 % et 79 % : « OTE »
@@ -181,7 +182,7 @@ OBST_BUF_ATR = 0.1                       # TP1 placé 0,1 ATR H1 avant l'obstacl
 # Tendance de S5 : définition unique de setups.py (BOS par clôture, âge en jambes), partagée avec S2 et les alertes.
 
 # --- S3 CRT (Candle Range Theory) pur : voir setups.py ---
-CRT_REFS = ("D1", "H4")             # bougies de référence C1 / C2 (range daily et H4, plus de H1) ; la confirmation est toujours en M15
+CRT_REFS = ("D1", "H4")             # bougies de référence C1 / C2 (range daily et H4, plus de H1) ; la confirmation est en M5 par défaut (S3_CONFIRM_TF=M15 : M15)
 CRT_PIVOT_BARS = 16                 # le swing M15 cassé date de 16 bougies M15 (4 h) au plus avant l'extrême de C2
 CRT_SL_BUF_ATR = 0.15               # marge du stop au-delà de l'extrême de C2 (x ATR M15)
 CRT_TP3_EXT = 0.5                   # TP3 = bord opposé de C1 + 50 % de son range
@@ -195,7 +196,8 @@ CRT_MAX_AGE_MIN = _num("S3_MAX_AGE_MIN", 20.0)   # déclencheur de plus de 20 mi
 CRT_CONTEXT_ALIGN = _flag("S3_CONTEXT_ALIGN", True)  # pas contre une tendance H4 ou D1 claire
 
 # --- Timeframe de confirmation / d'entrée, par stratégie : M15 ou M5 (variables S1_CONFIRM_TF, S2_CONFIRM_TF, S3_CONFIRM_TF pour CRT) ---
-# Vide = défaut : M15 pour S1 (cascade selon INTRADAY) et S3 (CRT) ; S2 suit INTRADAY (M15 si actif, sinon M5).
+# Vide = défaut : M5 pour le cadre H4/H1 (cascade H4>H1 de S1, S2, S3 CRT) ; les autres cascades de S1 gardent leur entrée (H1 pour D1>H4>H1, M5 pour H1>M15>M5).
+# M15 : restaure l'entrée M15 (S1 : cascade H4>H1>M15 ; S2 et S3 : confirmation en M15).
 # M5 : la cassure de structure, le bloc d'ordre, le FVG, le stop et le suivi de fraîcheur se calculent sur les bougies M5 (cadre H4/H1
 # inchangé) : entrée plus précoce et stop plus serré, mais plus de bruit, et le spread pèse davantage. Les durées exprimées en bougies
 # M15 sont converties (x 3 en M5) par bars().
@@ -210,11 +212,11 @@ S3_CONFIRM_TF = _tf("S3_CONFIRM_TF")                 # CRT
 
 
 def confirm_tf(code):
-    """Timeframe de confirmation de la stratégie `code` (S1, S2, S3) : 'M15' ou 'M5' ; vide = défaut."""
+    """Timeframe de confirmation de la stratégie `code` (S2, S3 CRT) : 'M15' ou 'M5' ; vide = défaut, M5 (entrée du cadre H4/H1)."""
     v = globals().get(f"{code}_CONFIRM_TF") or ""
     if v in ("M15", "M5"):
         return v
-    return "M5" if (code == "S2" and not INTRADAY) else "M15"
+    return "M5"
 
 
 def bars(n_m15, tf):
@@ -648,7 +650,7 @@ def scan_s2(provide, now, funnel, dec=2, kz=True, mode="market"):
     a_h1, a_m15, a_m5 = unit(h1c), unit(m15c), unit(m5c)
     if min(a_h1, a_m15, a_m5) <= 0:
         return None
-    if confirm_tf("S2") == "M15":      # confirmation (CHoCH, bloc d'ordre, FVG) en M15 (cadre intraday) ou en M5
+    if confirm_tf("S2") == "M15":      # confirmation (CHoCH, bloc d'ordre, FVG) en M5 (défaut) ou en M15 (S2_CONFIRM_TF=M15)
         cf, cfc, a_cf, cf_n, pivot_bars = m15, m15c, a_m15, "M15", S2_PIVOT_BARS_M15
     else:
         cf, cfc, a_cf, cf_n, pivot_bars = m5, m5c, a_m5, "M5", S2_PIVOT_BARS
@@ -1080,16 +1082,19 @@ def _s5_unflip(r):
 
 
 def s1_cascades():
-    """Cascades (tendance, impulsion + Fibonacci, entrée) de S1 : celle du cadre intraday, ou les trois cascades avec INTRADAY=0. Avec S1_CONFIRM_TF=M5, même
-    tendance et même impulsion, seul le timeframe d'entrée devient M5 (les cascades qui deviennent identiques ne sont gardées qu'une fois)."""
-    cascades = S5_CASCADES_INTRADAY if INTRADAY else S5_CASCADES
+    """Cascades (tendance, impulsion + Fibonacci, entrée) de S1 : les trois cascades (D1>H4>H1, H4>H1>M5, H1>M15>M5), ou la seule H4>H1>M5 du cadre
+    intraday avec S1_MULTI_CASCADE=0. Avec S1_CONFIRM_TF=M5, même tendance et même impulsion, toutes entrent en M5 (les cascades qui deviennent
+    identiques ne sont gardées qu'une fois) ; avec S1_CONFIRM_TF=M15, la cascade H4>H1 entre en M15 (ancien défaut)."""
+    cascades = S5_CASCADES if (S5_MULTI_CASCADE or not INTRADAY) else S5_CASCADES_INTRADAY
     if S1_CONFIRM_TF == "M5":
         cascades = list(dict.fromkeys((h, m, "M5") for h, m, _ in cascades))
+    elif S1_CONFIRM_TF == "M15":
+        cascades = [(h, m, "M15" if (h, m) == ("H4", "H1") else e) for h, m, e in cascades]
     return cascades
 
 
 def scan_s5(provide, now, funnel, dec=2, kz=True, mode="market"):
-    """Retourne la LISTE des signaux (une par cascade et par sens : D1>H4>H1, H4>H1>M15, H1>M15>M5), la cascade la plus
+    """Retourne la LISTE des signaux (une par cascade et par sens : D1>H4>H1, H4>H1>M5, H1>M15>M5), la cascade la plus
     haute en premier ; le garde-fou « un trade par actif, stratégie et sens » écarte les doublons d'un même mouvement.
     Garde-fous : volatilité, âge de tendance, ADX, alignement D1, session (kz), ratio minimal, plafond de risque, obstacles H4/H1."""
     out = []

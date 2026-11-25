@@ -6,9 +6,9 @@ Bot Python qui scanne **l'or (XAUUSD)** toutes les 5 minutes sur l'API publique 
 
 | Code | Stratégie | Unités de temps (cadre intraday par défaut) |
 |---|---|---|
-| S1 | **Pullback** : tendance de structure, impulsion, retracement Fibonacci 50-79 %, entrée sur sweep + FVG + bloc d'ordre | H4 > H1 > M15 |
-| S2 | **Sweep + CHoCH** (Smart Money) : balayage d'une liquidité sur une zone H1/H4, puis cassure de structure | contexte H4/H1, sweep M15, CHoCH M15 |
-| S3 | **CRT** (Candle Range Theory) : C1/C2 en D1 ou H4, cassure de structure M15 après C2 | D1/H4 > M15 |
+| S1 | **Pullback** : tendance de structure, impulsion, retracement Fibonacci 50-79 %, entrée sur sweep + FVG + bloc d'ordre | D1 > H4 > H1, H4 > H1 > M5, H1 > M15 > M5 |
+| S2 | **Sweep + CHoCH** (Smart Money) : balayage d'une liquidité sur une zone H1/H4, puis cassure de structure | contexte H4/H1, sweep M15, CHoCH M5 (M15 avec `S2_CONFIRM_TF=M15`) |
+| S3 | **CRT** (Candle Range Theory) : C1/C2 en D1 ou H4, cassure de structure M5 après C2 (M15 avec `S3_CONFIRM_TF=M15`) | D1/H4 > M5 |
 | S4 | **Market Profiles** (`profiles.py`) : range, manipulation, expansion ; 5 setups A à E sur des niveaux clés, entrée au retest | M15 (M5 ou H1 au choix), niveaux H1/H4/D1 |
 
 Le bot est **purement price action** : aucun indicateur (ni ATR, ni RSI, ni ADX, ni moyenne mobile) et aucune variable obligatoire.
@@ -80,12 +80,13 @@ Seules les variables **transmises par `gold.yml`** agissent sur le bot en direct
 | `ENTRY_MODE`, `ENTRY_MODES` | `auto` (défaut : ordres limites pour les 4 stratégies), `market` ou `limit` ; par stratégie : `S2:market,S3:market` |
 | `INTRADAY` | `0` désactive le cadre intraday ; `INTRADAY_RUNNERS=1` laisse courir le reste après TP1 en fin de séance |
 | `S1_MIN_RR`, `S1_RISK_CAP_H1`, `S1_D1_ALIGN`, `S1_OBST_ENTRY` | Garde-fous de S1 (défauts : 3 ; 2 ; actif ; actif) ; `0` désactive les valeurs numériques |
+| `S1_MULTI_CASCADE` | `0` : une seule cascade (H4 > H1 > M5) avec le cadre intraday ; par défaut les trois cascades (D1 > H4 > H1, H4 > H1 > M5, H1 > M15 > M5) |
 | `S2_BIAS_FILTER`, `S2_HTF_ZONE`, `S2_FIB_FILTER` | Garde-fous de S2 : biais de structure H4 (défaut : **désactivé**, le signal indique s'il est contre le biais), sweep sur zone H1/H4 (défaut : actif), côté Fibonacci (défaut : **désactivé**) ; `1` active, `0` désactive |
 | `S2_SESSION_FILTER`, `S2_QUIET_FROM`, `S2_QUIET_UNTIL` | Fenêtre sans alerte de S2 : de la fermeture de New York (`16:45`) à l'ouverture de Londres (`02:00`), heure de New York ; `S2_SESSION_FILTER=0` la supprime (défaut : actif). Aucune killzone obligatoire |
 | `S2_MIN_RR`, `S2_RISK_CAP_H1`, `S2_MAX_AGE_MIN`, `S2_SWEEP_MIN_ATR` | Ratio minimal sur TP1 (défaut : 2 ; S1 reste à 3), risque maximal en unités H1 (1,5), âge maximal du déclencheur en minutes (20), dépassement minimal de la mèche en unités M15 (0,1) |
 | `REVERSAL_MIN_SIGNS`, `REVERSAL_ALERTS` | Alerte de retournement (information, § 8) : signes d'essoufflement exigés sur 2 (1) ; `REVERSAL_ALERTS=0` supprime le message |
 | `S3_MIN_RR`, `S3_MAX_AGE_MIN`, `S3_CONTEXT_ALIGN`, `S3_SWEEP_MIN_ATR` | **CRT (S3)** : ratio minimal sur TP1 (celui de S1), âge du déclencheur (20 min), pas contre une tendance H4/D1 claire (actif), dépassement minimal de C2 en unités de référence (0,1) |
-| `S1_CONFIRM_TF`, `S2_CONFIRM_TF`, `S3_CONFIRM_TF` (CRT) | Timeframe d'entrée/confirmation : `M15` ou `M5` (voir § 6.7) |
+| `S1_CONFIRM_TF`, `S2_CONFIRM_TF`, `S3_CONFIRM_TF` (CRT) | Timeframe d'entrée/confirmation : `M5` (défaut du cadre H4/H1) ou `M15` (voir § 6.7) |
 | `S4_TF`, `S4_BARS`, `S4_MIN_RR`, `S4_RISK_CAP_H1`, `S4_SL_BUF_ATR`, `S4_MAX_AGE_MIN`, `S4_SESSION_FILTER` | **Market Profiles (S4)** : timeframe d'analyse `M5`, `M15` ou `H1` (M15), bougies clôturées analysées (160), ratio minimal sur TP1 (celui de S1, soit 3), risque maximal en unités H1 (2), marge du stop au-delà du sweep en unités (0,15 ; 0 = sur l'extrême), âge maximal du déclencheur en minutes (20), session obligatoire sur les marchés à séance (actif ; `0` désactive) |
 | `UNIT_PCT` | **Unité de prix de l'or** : pourcentage du prix pour une bougie H1, ex. `frxXAUUSD=0.4` ; remplace les valeurs par défaut de `strategies.py` (voir § 5) |
 | `STOP_MODE`, `S1_STOP_MODE`, `S2_STOP_MODE`, `S3_STOP_MODE` (CRT) | Placement du stop de S1, S2 et S3 (CRT) : `sweep` (défaut : au-delà de l'extrême du sweep) ou `ob` (à l'autre extrémité de la zone d'entrée, voir § 6.9) ; la variable de la stratégie prime sur `STOP_MODE` |
@@ -135,7 +136,7 @@ Le message de contrôle (`test = true`) et les logs signalent les variables d'an
 
 ### 6.1 S1 Pullback (HTF > MTF > LTF)
 
-Cascade par défaut (cadre intraday) : **tendance H4, impulsion H1, entrée M15**. Avec `INTRADAY=0`, trois cascades : D1 > H4 > H1, H4 > H1 > M15, H1 > M15 > M5. Avec `S1_CONFIRM_TF=M5`, le timeframe d'entrée devient M5. Achat et vente symétriques.
+**Trois cascades** (tendance > impulsion + Fibonacci > entrée) : **D1 > H4 > H1**, **H4 > H1 > M5** et **H1 > M15 > M5** (les deux dernières entrent en M5), la plus haute en premier ; le garde-fou « un trade par actif, stratégie et sens » écarte les doublons d'un même mouvement. Avec `S1_MULTI_CASCADE=0`, le cadre intraday (§ 6.5) ne garde que H4 > H1 > M5. Avec `S1_CONFIRM_TF=M5`, toutes les cascades gardent leur tendance et leur impulsion mais entrent en M5 (D1 > H4 > M5, H4 > H1 > M5, H1 > M15 > M5) ; avec `S1_CONFIRM_TF=M15`, la cascade H4 > H1 entre en M15 (ancien défaut). Achat et vente symétriques.
 
 **Filtres de contexte**
 1. **Tendance HTF** (structure) naissante ou établie ; la tendance mûre est écartée.
@@ -165,7 +166,7 @@ Cascade par défaut (cadre intraday) : **tendance H4, impulsion H1, entrée M15*
 1. **Niveaux de liquidité** (chacun a une date de naissance) : plus haut/bas de la veille (PDH/PDL, journée 17h-17h New York), extrêmes de la plage asiatique (20h-02h, valables dès 02h00, au moins 20 bougies M15), **equal highs/lows** H1 (deux swings à moins de 0,15 unité H1, parmi les 8 derniers). Un niveau n'est de la liquidité **qu'une fois** : s'il a déjà été dépassé par une mèche M15 depuis sa naissance, il est ignoré.
 2. **Sweep M15** parmi les 8 dernières bougies : la mèche dépasse le niveau d'au moins 0,1 unité M15 et n'est pas suivie d'une clôture au-delà.
 3. **Biais de structure** (`S2_BIAS_FILTER`, **désactivé par défaut** : les deux sens sont pris et le message indique « contre le biais H4 » le cas échéant ; avec `S2_BIAS_FILTER=1` : tendance **H4 exclusivement** (le H1 n'est jamais consulté), selon la définition de § 5. On ne prend que les ventes après un sweep de sommet dans un biais baissier, et les achats dans un biais haussier ; si le H4 n'a pas de tendance claire, pas de biais donc pas de signal. Le filtre s'applique avant le choix du sweep).
-4. **CHoCH** en M15 (M5 avec `S2_CONFIRM_TF=M5`) : clôture au-delà du dernier swing formé dans les 12 bougies M15 (36 en M5) avant l'extrême du sweep, avec déplacement (≥ 1,2 fois), parmi les 2 dernières bougies.
+4. **CHoCH** en M5 (M15 avec `S2_CONFIRM_TF=M15`) : clôture au-delà du dernier swing formé dans les 36 bougies M5 (12 en M15) avant l'extrême du sweep, avec déplacement (≥ 1,2 fois), parmi les 2 dernières bougies.
 5. **Fenêtre horaire** : plus de killzone obligatoire ; le seul blocage de S2 est la fenêtre sans alerte **après la fermeture de New York** (16h45 -> 02h00 heure de New York, réglable avec `S2_QUIET_FROM` / `S2_QUIET_UNTIL`, désactivable avec `S2_SESSION_FILTER=0`), en plus des fenêtres de rollover et de week-end de `guard.py`.
 6. **Zone H4/H1** (`S2_HTF_ZONE`) : l'étendue du sweep recoupe (tolérance 0,25 unité H1) un bloc d'ordre ou un FVG **non retesté** du sens du trade, né d'un déplacement qui casse la structure ; H4 avant H1, bloc d'ordre avant FVG.
 7. **Entrée** : ordre limite sur le bloc d'ordre M15 (bord proche) ou le FVG M15 (milieu) du mouvement ; à défaut, marché si le prix n'a pas fui de plus de 0,75 unité depuis la clôture du déclencheur. Une zone à plus de 1,5 unité du prix écarte le signal. **Stop** : au-delà de l'extrême du sweep, plus 0,15 unité M15 ; **risque maximal 1,5 unité H1**. Avec `S2_STOP_MODE=ob`, le stop passe à l'autre extrémité du bloc d'ordre (ou du FVG) d'entrée.
@@ -180,7 +181,7 @@ Cascade par défaut (cadre intraday) : **tendance H4, impulsion H1, entrée M15*
 | C1 | Dernière bougie **D1 ou H4** clôturée avant C2. Taille de son range entre 0,8 et 3,5 unités du timeframe de référence. |
 | C2 | Bougie clôturée qui dépasse **un seul** côté de C1 d'au moins 0,1 unité et **clôture dans le range de C1**. Une bougie englobante (les deux côtés) ou une clôture hors range n'est pas un CRT. |
 | C3 | Bougie en formation : la livraison se fait pendant C3, la confirmation doit arriver avant sa clôture. |
-| Entrée | Première clôture M15 au-delà du dernier swing M15 (CHoCH avec déplacement ≥ 1,2 fois), **après la clôture de C2**, avec ce swing à 16 bougies M15 (48 en M5) au plus avant l'extrême de C2 et une cassure parmi les 2 dernières bougies. Si le prix reprend l'extrême de C2, le sweep est annulé. Ordre limite sur le bloc d'ordre ou le FVG M15 du mouvement (jusqu'à 1,5 unité M15 du prix) ; sinon marché si le prix n'a pas fui de plus de 0,75 unité M15. |
+| Entrée | Première clôture M5 (M15 avec `S3_CONFIRM_TF=M15`) au-delà du dernier swing du même timeframe (CHoCH avec déplacement ≥ 1,2 fois), **après la clôture de C2**, avec ce swing à 48 bougies M5 (16 en M15) au plus avant l'extrême de C2 et une cassure parmi les 2 dernières bougies. Si le prix reprend l'extrême de C2, le sweep est annulé. Ordre limite sur le bloc d'ordre ou le FVG du mouvement, dans le timeframe d'entrée (jusqu'à 1,5 unité de ce timeframe du prix) ; sinon marché si le prix n'a pas fui de plus de 0,75 unité. |
 | Stop | Au-delà de l'extrême de C2, plus 0,15 unité M15 (avec `S3_STOP_MODE=ob` : à l'autre extrémité du bloc d'ordre ou du FVG d'entrée, même marge). |
 | Objectifs | TP1 milieu de C1, TP2 bord opposé de C1, TP3 bord opposé + 50 % du range. **Ratio ≥ 3 jusqu'au milieu de C1.** |
 | Garde-fous | Âge du déclencheur ≤ 20 min, **pas contre une tendance H4 ou D1 claire**, obstacles H4/H1 du cadre intraday. Aucune limite de session. |
@@ -214,7 +215,7 @@ Au plus un signal par bougie de référence (D1 et H4). Le bot utilise **toutes*
 - **Objectif avant le prochain obstacle** (S1 à S4) : si un obstacle opposé est devant TP1 à moins de 1 R de l'entrée (ou à moins de 0,8 R une fois le tampon retiré), le signal est écarté ; sinon les objectifs au-delà sont ramenés à 0,1 unité H1 avant l'obstacle et le ratio minimal est recontrôlé (sur TP1 pour les quatre stratégies).
 - **Entrée sur réaction à un niveau** : S1 exige que l'entrée soit à moins de 0,5 unité H1 d'un niveau ou d'une zone H4/H1 du bon côté (`S1_OBST_ENTRY`) ; S2 l'exige seulement si `S2_HTF_ZONE=0` ; S3 et S4 non.
 - **Fin de séance** : tout trade est clôturé au plus tard à **16h45 New York** ou **10 heures** après l'alerte, **même après TP1** (sauf `INTRADAY_RUNNERS=1`) ; un ordre en attente n'est jamais conservé au-delà.
-- `INTRADAY=0` désactive ce cadre : cascades S1 à 3 niveaux, confirmation de S2 en M5, pas de fin de séance, pas de filtre d'obstacles.
+- `INTRADAY=0` désactive ce cadre : confirmation de S2 en M5, pas de fin de séance, pas de filtre d'obstacles (les trois cascades de S1 restent actives dans les deux cas).
 
 ### 6.6 Ordres limites
 
@@ -229,16 +230,16 @@ Par défaut, chaque alerte est un **ordre limite** posé au retest d'une zone ; 
 
 Le bot signale « Ordre limite touché », « Ordre annulé » (TP1 atteint sans fill, bougie clôturée au-delà du stop, week-end) ou « Ordre expiré » pour que tu annules chez ton courtier. `/bilan` affiche le taux de remplissage. **Contrepartie** : meilleur prix et stop plus court, mais certains trades ne sont jamais remplis, et ce sont souvent les meilleurs. Compare avec `--set gold.ENTRY_MODE=market,limit`.
 
-### 6.7 Confirmation en M15 ou en M5
+### 6.7 Entrée / confirmation en M5 (défaut) ou en M15
 
-| Stratégie | Variable | Ce qui passe en M5 |
+| Stratégie | Variable | Effet |
 |---|---|---|
-| S1 | `S1_CONFIRM_TF` | Entrée de la cascade (`H4 > H1 > M5`) ; seule la valeur `M5` agit |
-| S2 | `S2_CONFIRM_TF` | CHoCH, bloc d'ordre, FVG (le sweep reste détecté en M15) ; défaut M15 en intraday, M5 sinon |
-| S3 (CRT) | `S3_CONFIRM_TF` | Cassure de structure après C2 et zone d'entrée |
+| S1 | `S1_CONFIRM_TF` | Par défaut, la cascade H4 > H1 entre en M5 (D1 > H4 > H1 garde l'entrée H1, H1 > M15 > M5 entre en M5). `M5` : toutes les cascades entrent en M5 ; `M15` : la cascade H4 > H1 entre en M15 |
+| S2 | `S2_CONFIRM_TF` | CHoCH, bloc d'ordre, FVG (le sweep reste détecté en M15) ; défaut M5, `M15` pour les confirmer en M15 |
+| S3 (CRT) | `S3_CONFIRM_TF` | Cassure de structure après C2 et zone d'entrée ; défaut M5, `M15` pour l'ancien comportement |
 | S4 (Market Profiles) | `S4_TF` | Timeframe d'analyse et d'entrée (`M5`, `M15` ou `H1`) |
 
-Le cadre H4/H1 ne change pas ; les durées en bougies M15 sont converties (x 3). M5 donne une entrée plus précoce et un stop plus serré, mais plus de bruit et un spread plus lourd : compare au backtest avant de t'y fier (`--only S2 --split 0.6 --set strategies.S2_CONFIRM_TF=M15,M5`).
+Le cadre H4/H1 ne change pas ; les durées en bougies M15 sont converties (x 3). M5 donne une entrée plus précoce et un stop plus serré, mais plus de bruit et un spread plus lourd : compare au backtest avant de t'y fier (`--only S2 --split 0.6 --set strategies.S2_CONFIRM_TF=M5,M15`). S4 (Market Profiles) garde son propre timeframe `S4_TF` (M15 par défaut).
 
 ### 6.8 Confluence et cohérence entre stratégies
 

@@ -1,0 +1,1 @@
+{"health": {"OR": {"last_ok": 1795643145, "fails": 1, "alerted": false}}, "funnel": {"OR": {"data": 2, "S2_niveau": 2, "CRT_c2": 2, "S9_setup": 1, "S9_session": 1, "S5_tendance": 1, "S5_impulsion": 1}}, "last_report": 1795553362, "tg_offset": 49138000}

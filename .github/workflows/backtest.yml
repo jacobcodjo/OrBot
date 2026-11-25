@@ -55,6 +55,7 @@ jobs:
           S1_RISK_CAP_H1: ${{ vars.S1_RISK_CAP_H1 }}
           S1_ADX_MIN: ${{ vars.S1_ADX_MIN }}
           S1_D1_ALIGN: ${{ vars.S1_D1_ALIGN }}
+          S1_MULTI_CASCADE: ${{ vars.S1_MULTI_CASCADE }}
           S1_OBST_ENTRY: ${{ vars.S1_OBST_ENTRY }}
           S2_BIAS_FILTER: ${{ vars.S2_BIAS_FILTER }}
           S2_HTF_ZONE: ${{ vars.S2_HTF_ZONE }}
